@@ -1,0 +1,13 @@
+{
+    "name": "Sector",
+    "alias": "sector",
+    "description": "",
+    "keywords": [],
+    "priority": 0,
+    "providers": [
+        "Modules\\Sector\\Providers\\SectorServiceProvider"
+    ],
+    "aliases": {},
+    "files": [],
+    "requires": []
+}

@@ -1,0 +1,13 @@
+{
+    "name": "Duration",
+    "alias": "duration",
+    "description": "",
+    "keywords": [],
+    "priority": 0,
+    "providers": [
+        "Modules\\Duration\\Providers\\DurationServiceProvider"
+    ],
+    "aliases": {},
+    "files": [],
+    "requires": []
+}

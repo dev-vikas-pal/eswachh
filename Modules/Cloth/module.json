@@ -1,0 +1,13 @@
+{
+    "name": "Cloth",
+    "alias": "cloth",
+    "description": "",
+    "keywords": [],
+    "priority": 0,
+    "providers": [
+        "Modules\\Cloth\\Providers\\ClothServiceProvider"
+    ],
+    "aliases": {},
+    "files": [],
+    "requires": []
+}

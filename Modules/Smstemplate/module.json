@@ -1,0 +1,13 @@
+{
+    "name": "Smstemplate",
+    "alias": "smstemplate",
+    "description": "",
+    "keywords": [],
+    "priority": 0,
+    "providers": [
+        "Modules\\Smstemplate\\Providers\\SmstemplateServiceProvider"
+    ],
+    "aliases": {},
+    "files": [],
+    "requires": []
+}

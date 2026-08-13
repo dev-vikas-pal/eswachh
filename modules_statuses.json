@@ -1,0 +1,20 @@
+{
+    "Article": false,
+    "Tag": false,
+    "Comment": false,
+    "Category": false,
+    "Team": false,
+    "Package": true,
+    "CarCategory": true,
+    "Car": true,
+    "Order": true,
+    "Internaltype": true,
+    "Duration": true,
+    "Cloth": true,
+    "Reminder": true,
+    "Sector": true,
+    "Society": true,
+    "Report": true,
+    "Smstemplate": true,
+    "Customer": true
+}

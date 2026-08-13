@@ -1,0 +1,13 @@
+{
+    "name": "Internaltype",
+    "alias": "internaltype",
+    "description": "",
+    "keywords": [],
+    "priority": 0,
+    "providers": [
+        "Modules\\Internaltype\\Providers\\InternaltypeServiceProvider"
+    ],
+    "aliases": {},
+    "files": [],
+    "requires": []
+}

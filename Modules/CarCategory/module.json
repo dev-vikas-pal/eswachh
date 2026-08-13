@@ -1,0 +1,13 @@
+{
+    "name": "CarCategory",
+    "alias": "carcategory",
+    "description": "",
+    "keywords": [],
+    "priority": 0,
+    "providers": [
+        "Modules\\CarCategory\\Providers\\CarCategoryServiceProvider"
+    ],
+    "aliases": {},
+    "files": [],
+    "requires": []
+}

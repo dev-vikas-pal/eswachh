@@ -194,6 +194,8 @@
                 </div>
             </div>
 
+            @include('backend.users.includes.sector_assignment')
+
             <div class="row mb-3">
                 <div class="col-sm-4">
                     <div class="form-group">

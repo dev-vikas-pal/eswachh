@@ -6,6 +6,7 @@ use App\Authorizable;
 use App\Http\Controllers\Controller;
 use App\Models\Permission;
 use App\Models\Role;
+use App\Services\SectorService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -61,9 +62,17 @@ class CleanerController extends Controller
         $module_model = $this->module_model;
         $module_name_singular = Str::singular($module_name);
 
-        $cleanerDatas = \App\Models\User::whereHas('roles', function ($query) {
-            $query->where('name', 'cleaner');
-        })->get();
+        $sectorIds = SectorService::selectedSectorIds($request->filter_sector_id);
+        $sectorOptions = SectorService::sectorOptions();
+        $canSeeAllSectors = ! SectorService::isFranchiseOwner();
+
+        $cleanerDatas = SectorService::scopeByUserSector(
+            \App\Models\User::whereHas('roles', function ($query) {
+                $query->where('name', 'cleaner');
+            }),
+            $sectorIds,
+            'users.id'
+        )->get();
 
         $module_action = 'List';
 
@@ -113,6 +122,8 @@ class CleanerController extends Controller
                 $data = $data->where('orders.assigned_user_id', $request->filter_assigned_user_id);
             }
         }
+        $data = $data->forSectors($sectorIds);
+
         $data = $data->where(function($query) {
             $query->where('orders.status', 2)
                   ->orWhere('orders.status', 4);
@@ -120,8 +131,9 @@ class CleanerController extends Controller
 
         $filter['filter_assigned_user_id'] = $request->filter_assigned_user_id ?? '';
         $filter['filter_date'] = $request->filter_date ?? '';
+        $filter['filter_sector_id'] = $request->filter_sector_id ?? '*';
 
-        $$module_name = $data->paginate();
+        $$module_name = $data->paginate()->withQueryString();
 
         //   echo "<pre>";print_r($$module_name);die;
 
@@ -129,7 +141,7 @@ class CleanerController extends Controller
 
         return view(
             "backend.$module_path.index",
-            compact('module_title', 'module_name', "$module_name", 'module_icon', 'module_name_singular', 'module_action', 'cleanerDatas', 'filter')
+            compact('module_title', 'module_name', "$module_name", 'module_icon', 'module_name_singular', 'module_action', 'cleanerDatas', 'filter', 'sectorOptions', 'canSeeAllSectors')
         );
     }
 

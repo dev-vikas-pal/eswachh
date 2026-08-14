@@ -96,6 +96,17 @@ class User extends Authenticatable implements HasMedia, MustVerifyEmail
     }
 
     /**
+     * Sectors this user is allowed to operate in.
+     * Used by the Franchise Owner role, which can own more than one sector.
+     *
+     * @return \Illuminate\Database\Eloquent\Relations\BelongsToMany
+     */
+    public function sectors()
+    {
+        return $this->belongsToMany('Modules\Sector\Models\Sector', 'sector_user', 'user_id', 'sector_id')->withTimestamps();
+    }
+
+    /**
      * Get the list of users related to the current User.
      *
      * @return [array] roels

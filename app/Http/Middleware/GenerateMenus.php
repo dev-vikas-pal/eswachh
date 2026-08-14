@@ -2,10 +2,30 @@
 
 namespace App\Http\Middleware;
 
+use App\Services\SectorService;
 use Closure;
 
 class GenerateMenus
 {
+    /**
+     * Master data screens a Franchise Owner must not navigate to. They still
+     * hold the matching view permissions because the order form's dropdowns
+     * read from these endpoints - this hides the navigation, not the data.
+     *
+     * @var array<int, string>
+     */
+    private const MASTER_MENU_PATTERNS = [
+        'admin/carcategories*',
+        'admin/cars*',
+        'admin/cloths*',
+        'admin/durations*',
+        'admin/internaltypes*',
+        'admin/packages*',
+        'admin/sectors*',
+        'admin/societies*',
+        'admin/smstemplates*',
+    ];
+
     /**
      * Handle an incoming request.
      *
@@ -66,6 +86,62 @@ class GenerateMenus
                         'class' => 'nav-link',
                     ]);
             }
+
+            // Complaints. Customers and cleaners reach this too, which is why
+            // it sits above the sector reporting entries.
+            $menu->add('<i class="nav-icon fa-solid fa-comment-dots"></i> '.__('Complaints'), [
+                'route' => 'backend.complaints.index',
+                'class' => 'nav-item',
+            ])
+                ->data([
+                    'order' => 3,
+                    'activematches' => ['admin/complaints*'],
+                    'permission' => ['view_complaints'],
+                ])
+                ->link->attr([
+                    'class' => 'nav-link',
+                ]);
+
+            $menu->add('<i class="nav-icon fa-solid fa-clipboard-check"></i> '.__('Attendance'), [
+                'route' => 'backend.attendances.index',
+                'class' => 'nav-item',
+            ])
+                ->data([
+                    'order' => 5,
+                    'activematches' => ['admin/attendances*'],
+                    'permission' => ['view_attendances'],
+                ])
+                ->link->attr([
+                    'class' => 'nav-link',
+                ]);
+
+            // Payments
+            $menu->add('<i class="nav-icon fa-solid fa-indian-rupee-sign"></i> '.__('Payments'), [
+                'route' => 'backend.payments.index',
+                'class' => 'nav-item',
+            ])
+                ->data([
+                    'order' => 6,
+                    'activematches' => ['admin/payments'],
+                    'permission' => ['view_payments'],
+                ])
+                ->link->attr([
+                    'class' => 'nav-link',
+                ]);
+
+            $menu->add('<i class="nav-icon fa-solid fa-chart-column"></i> '.__('Payment Reports'), [
+                'route' => 'backend.payments.reports',
+                'class' => 'nav-item',
+            ])
+                ->data([
+                    'order' => 7,
+                    'activematches' => ['admin/payments/reports'],
+                    'permission' => ['view_payments'],
+                ])
+                ->link->attr([
+                    'class' => 'nav-link',
+                ]);
+
             // Notifications
             // $menu->add('<i class="nav-icon fas fa-bell"></i> Notifications', [
             //     'route' => 'backend.notifications.index',
@@ -204,6 +280,22 @@ class GenerateMenus
                 ->link->attr([
                     'class' => 'nav-link',
                 ]);
+
+            // Manage Masters is hidden from Franchise Owners. They hold the
+            // master view permissions only so the order form's dropdowns work.
+            if (SectorService::isFranchiseOwner()) {
+                $menu->filter(function ($item) {
+                    $activematches = $item->data('activematches');
+
+                    if (empty($activematches)) {
+                        return true;
+                    }
+
+                    $activematches = is_string($activematches) ? [$activematches] : $activematches;
+
+                    return empty(array_intersect($activematches, self::MASTER_MENU_PATTERNS));
+                });
+            }
 
             // Access Permission Check
             $menu->filter(function ($item) {

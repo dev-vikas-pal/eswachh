@@ -15,14 +15,57 @@ class SMSService
         return $mobileNumberCount > 0 ? true : false;
     }
 
+    /**
+     * Should messages actually be delivered from this environment?
+     *
+     * Never from the test suite. Otherwise the configured value wins, and with
+     * nothing configured only production sends - a developer running against a
+     * copy of live data must not WhatsApp real customers.
+     */
+    public static function deliveryEnabled(): bool
+    {
+        if (app()->runningUnitTests()) {
+            return false;
+        }
+
+        $configured = config('services.msg91.enabled');
+
+        if ($configured !== null && $configured !== '') {
+            return filter_var($configured, FILTER_VALIDATE_BOOLEAN);
+        }
+
+        return app()->environment('production');
+    }
+
+    /**
+     * Write the message we would have sent to the log.
+     *
+     * Deliberately includes the variables: for the 'otp' template that is the
+     * one time code, which is how you finish a signup on a local machine.
+     */
+    private static function logInsteadOfSending($mobileNo, $template_id, array $variables): bool
+    {
+        Log::info('WhatsApp message not sent (delivery disabled in '.app()->environment().').', [
+            'to' => $mobileNo,
+            'template' => $template_id,
+            'variables' => $variables,
+        ]);
+
+        return true;
+    }
+
     public static function sendWhatsAppMsg($mobileNo, $template_id, $variables = [])
     {
+        if (! self::deliveryEnabled()) {
+            return self::logInsteadOfSending($mobileNo, $template_id, (array) $variables);
+        }
+
         $parameters = [];
         foreach ($variables as $variable) {
             $parameters[] = ['type' => 'text', 'text' => $variable];
         }
-        $authkey = env('MSG91_AUTH_TOKEN');
-        $integrated_number = env('MSG91_WHATSAPP_NUMBER');
+        $authkey = config('services.msg91.auth_token');
+        $integrated_number = config('services.msg91.whatsapp_number');
 
         $response = Http::withHeaders([
             'Content-Type' => 'application/json',
@@ -54,15 +97,15 @@ class SMSService
         $responsearr = json_decode($responseBody);
         Log::info("Receiving response from msg91 for => ".$template_id);
         Log::info("Response => " . print_r($responsearr,true));
-        if ($responsearr->status == 'success') {
-            return true;
-        }
-        return false;
+
+        // A gateway outage returns something that is not the expected JSON, and
+        // reading ->status off null used to be a fatal error.
+        return ($responsearr->status ?? null) === 'success';
     }
 
     public static function verifyOTP($mobileNo, $otp)
     {
-        $apiKey = env('2FA_SMS_API_KEY');
+        $apiKey = config('services.twofactor.key');
         $smsURL = 'https://2factor.in/API/V1/' . $apiKey . '/SMS/VERIFY3/' . $mobileNo . '/' . $otp;
         $response = Http::post($smsURL);
         if ($response->successful()) {
@@ -74,7 +117,16 @@ class SMSService
 
     public static function sendSMS($mobileNo, $sms)
     {
-        $apiKey = env('2FA_SMS_API_KEY');
+        if (! self::deliveryEnabled()) {
+            Log::info('SMS not sent (delivery disabled in '.app()->environment().').', [
+                'to' => $mobileNo,
+                'message' => $sms,
+            ]);
+
+            return;
+        }
+
+        $apiKey = config('services.twofactor.key');
         $curl = curl_init();
         curl_setopt_array($curl, array(
             CURLOPT_URL => 'https://2factor.in/API/R1/',

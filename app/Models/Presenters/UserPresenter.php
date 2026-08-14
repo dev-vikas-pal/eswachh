@@ -2,10 +2,6 @@
 
 namespace App\Models\Presenters;
 
-use App\Models\Permission;
-use App\Models\Role;
-use Illuminate\Support\Facades\Cache;
-
 /**
  * Presenter Class for Book Module.
  */
@@ -46,31 +42,20 @@ trait UserPresenter
         }
     }
 
-    /**
-     * Cache Permissions Query.
+    /*
+     * There were getRolesAttribute() and getPermissionsAttribute() accessors
+     * here. They shadowed Spatie's roles and permissions relations and held
+     * every assignment in the cache with rememberForever, filtering it per
+     * user.
+     *
+     * Because everything that asks "can this user..." reads through those
+     * relations - hasRole(), can(), @can, the can: middleware - a newly
+     * created user appeared to have no roles at all, and any change to
+     * anybody's roles stayed invisible, until someone cleared the cache by
+     * hand. That is what produced 403s for freshly created accounts.
+     *
+     * They are gone: the real relations are correct and eager loadable. Screens
+     * that list many users load roles with ->with('roles') instead, which is
+     * one query for the page rather than one per row.
      */
-    public function getPermissionsAttribute()
-    {
-        $permissions = Cache::rememberForever('permissions_cache', function () {
-            return Permission::select('permissions.*', 'model_has_permissions.*')
-                ->join('model_has_permissions', 'permissions.id', '=', 'model_has_permissions.permission_id')
-                ->get();
-        });
-
-        return $permissions->where('model_id', $this->id);
-    }
-
-    /**
-     * Cache Roles Query.
-     */
-    public function getRolesAttribute()
-    {
-        $roles = Cache::rememberForever('roles_cache', function () {
-            return Role::select('roles.*', 'model_has_roles.*')
-                ->join('model_has_roles', 'roles.id', '=', 'model_has_roles.role_id')
-                ->get();
-        });
-
-        return $roles->where('model_id', $this->id);
-    }
 }

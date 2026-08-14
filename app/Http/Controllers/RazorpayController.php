@@ -12,6 +12,7 @@ use Modules\Package\Models\Package;
 use Modules\Cloth\Models\Cloth;
 use Carbon\Carbon;
 use App\Services\SMSService;
+use App\Services\RazorpayService;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
@@ -30,60 +31,83 @@ class RazorpayController extends Controller
     public function payment(Request $request)
     {
         $input = $request->all();
-        Log::info("Receiving response from Razorpay for new subscription");
-        Log::info("Response => " . print_r($input, true));
-        $api = new Api(env('RAZOR_KEY'), env('RAZOR_SECRET'));
-        $payment = $api->payment->fetch($input['razorpay_payment_id']);
+        Log::info('Razorpay callback for new subscription.', [
+            'razorpay_payment_id' => $input['razorpay_payment_id'] ?? null,
+            'razorpay_order_id' => $input['razorpay_order_id'] ?? null,
+        ]);
 
-        if (count($input)  && !empty($input['razorpay_payment_id'])) {
-            try {
-                $acquirerData = $payment['acquirer_data'];
-                $order = Order::where('razorpay_order_id', $payment['order_id'])->first();
-                if ($order) {
-                    $duration = Duration::where('id', $order->pakage_type)->select('duration')->first();
-                    $order = Order::find($order->id);
-                    $temp_password = $order->temp_password;
-                    $order->temp_password = $temp_password;
-                    $order->status = $payment['status'] == 'captured' ? 2 : 1;
-                    $order->payment_date = Carbon::now();
-                    $order->start_date = Carbon::now();
-                    $order->renew_date = Carbon::now()->addMonths($duration->duration);
-                    $order->payment_mode = $payment['method'];
-                    $order->transaction_id = $acquirerData->upi_transaction_id??'';
-                    $order->order_type = 'online';
-                    $order->payment_id = $payment['id'];
-                    $order->save();
-                    $user = User::find($order->user_id);
+        if (empty($input['razorpay_payment_id'])) {
+            \Session::put('error', 'We did not receive a payment reference. Please try again.');
 
-                    $package = Package::where('id', $order->package_id)->select('name')->first();
-                    $cloth = Cloth::where('id', $order->cloth_id)->select('name')->first();
-                    $clothService = $order->cloth_service == 1 ? "Yes - $cloth->name" : "No";
-
-                    SMSService::sendWhatsAppMsg($user->mobile, 'subscription_notification_customer2', [$package->name, $duration->duration, $order->car_number, $clothService, $user->email, $temp_password]);
-                    SMSService::sendWhatsAppMsg('8650316068', 'subscription_notification_admin', [$order->car_number, $package->name, $duration->duration]);
-                }
-            } catch (\Exception $e) {
-                return  $e->getMessage();
-                \Session::put('error', $e->getMessage());
-                return redirect()->back();
-            }
+            return redirect()->route('frontend.index');
         }
 
-        $paymentData = [
-            'user_id' => $user->id ?? 0,
-            'order_id' => $order->id ?? 0,
-            'payment_amount' => $payment['amount'] / 100,
-            'currency' => 'INR',
-            'payment_status' => $payment['status'] ?? 'Pending',
-            'payment_method' => $payment['method'] ?? '',
-            'payment_date_time' => now(),
-            'transaction_id' => $acquirerData->upi_transaction_id ?? '',
-            'payment_gateway' => 'Razorpay',
-            'payment_for' => 'Cloth',
-        ];
-        DB::table('payment_history')->insert($paymentData);
+        if (! RazorpayService::signatureIsValid($input)) {
+            \Session::put('error', 'This payment could not be verified. Please contact support.');
+
+            return redirect()->route('frontend.index');
+        }
+
+        $payment = RazorpayService::api()->payment->fetch($input['razorpay_payment_id']);
+
+        $order = Order::where('razorpay_order_id', $payment['order_id'])->first();
+
+        // A resubmitted callback must not start a second subscription period.
+        if (RazorpayService::alreadyProcessed($payment['id'])) {
+            Log::info('Razorpay payment already processed; ignoring repeat callback.', [
+                'razorpay_payment_id' => $payment['id'],
+            ]);
+
+            return redirect()->route('order-success', ['order' => $order]);
+        }
+
+        // The money is already taken, so the record is written before the
+        // subscription is touched.
+        RazorpayService::record($payment, $order, optional($order)->user_id, 'Subscription');
+
+        if (! $order) {
+            Log::error('Razorpay payment has no matching order.', [
+                'razorpay_payment_id' => $payment['id'],
+                'razorpay_order_id' => $payment['order_id'],
+            ]);
+
+            \Session::put('error', 'Your payment was received but we could not match it to an order. Our team will contact you.');
+
+            return redirect()->route('frontend.index');
+        }
+
+        try {
+            $duration = Duration::where('id', $order->pakage_type)->select('duration')->first();
+            $acquirerData = $payment['acquirer_data'] ?? null;
+            $temp_password = $order->temp_password;
+
+            $order->status = $payment['status'] == 'captured' ? 2 : 1;
+            $order->payment_date = Carbon::now();
+            $order->start_date = Carbon::now();
+            $order->renew_date = Carbon::now()->addMonths($duration->duration ?? 1);
+            $order->payment_mode = $payment['method'];
+            $order->transaction_id = $acquirerData->upi_transaction_id ?? '';
+            $order->order_type = 'online';
+            $order->payment_id = $payment['id'];
+            $order->save();
+
+            $user = User::find($order->user_id);
+            $package = Package::where('id', $order->package_id)->select('name')->first();
+            $cloth = Cloth::where('id', $order->cloth_id)->select('name')->first();
+            $clothService = $order->cloth_service == 1 ? "Yes - " . ($cloth->name ?? '') : "No";
+
+            if ($user) {
+                SMSService::sendWhatsAppMsg($user->mobile, 'subscription_notification_customer2', [$package->name ?? '', $duration->duration ?? '', $order->car_number, $clothService, $user->email, $temp_password]);
+                SMSService::sendWhatsAppMsg('8650316068', 'subscription_notification_admin', [$order->car_number, $package->name ?? '', $duration->duration ?? '']);
+            }
+        } catch (\Throwable $e) {
+            \Session::put('error', RazorpayService::reportFailure($e, $payment, $order));
+
+            return redirect()->route('order-success', ['order' => $order]);
+        }
 
         \Session::put('success', 'Payment successful, your order will be despatched in the next 48 hours.');
+
         return redirect()->route('order-success', ['order' => $order]);
     }
 }

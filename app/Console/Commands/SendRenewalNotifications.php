@@ -2,77 +2,140 @@
 
 namespace App\Console\Commands;
 
-use Illuminate\Console\Command;
-use App\Models\User;
-use App\Models\Order;
-use Illuminate\Support\Facades\Mail;
-use App\Mail\KuMail;
 use App\Services\SMSService;
+use Carbon\Carbon;
+use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Log;
+use Modules\Order\Models\Order;
 
+/**
+ * Daily job: chase the subscriptions that need attention.
+ *
+ * Four groups, each with its own message:
+ *   - due to renew within the next week
+ *   - already past their renewal date
+ *   - sitting on hold
+ *   - running low on cloths
+ *
+ * Queries go through the Order model so soft deleted orders are excluded; the
+ * previous version joined the tables directly and messaged deleted orders too.
+ */
 class SendRenewalNotifications extends Command
 {
-    /**
-     * The name and signature of the console command.
-     *
-     * @var string
-     */
-    protected $signature = 'renewal:send-notifications';
+    private const STATUS_ACTIVE = 2;
 
-    /**
-     * The console command description.
-     *
-     * @var string
-     */
-    protected $description = 'Command description';
+    private const STATUS_HOLD = 4;
 
-    /**
-     * Execute the console command.
-     */
-    public function handle()
+    protected $signature = 'renewal:send-notifications
+                            {--dry-run : Show who would be messaged without sending anything}';
+
+    protected $description = 'Send renewal, expiry, hold and low cloth reminders';
+
+    private bool $dryRun = false;
+
+    public function handle(): int
     {
-        $orders = User::join('orders', 'users.id', '=', 'orders.user_id')
-            ->where('orders.renew_date', '>=', now()->subDays(7))
-            ->where('orders.renew_date', '<=', now()->addDays(7))
-            ->get(['users.mobile', 'users.email', 'orders.renew_date']);
+        $this->dryRun = (bool) $this->option('dry-run');
 
-        // Send notifications to users
+        if ($this->dryRun) {
+            $this->warn('Dry run: no messages will be sent.');
+        }
+
+        $today = Carbon::today();
+
+        $dueSoon = Order::with('user')
+            ->where('status', self::STATUS_ACTIVE)
+            ->whereNotNull('renew_date')
+            ->whereDate('renew_date', '>=', $today)
+            ->whereDate('renew_date', '<=', $today->copy()->addDays(7))
+            ->get();
+
+        $expired = Order::with('user')
+            ->where('status', self::STATUS_ACTIVE)
+            ->whereNotNull('renew_date')
+            ->whereDate('renew_date', '<', $today)
+            ->get();
+
+        $onHold = Order::with('user')
+            ->where('status', self::STATUS_HOLD)
+            ->whereNotNull('renew_date')
+            ->get();
+
+        $lowCloths = Order::with('user')
+            ->where('status', self::STATUS_ACTIVE)
+            ->where('cloth_service', 1)
+            ->where('cloth_count', '<=', 10)
+            ->get();
+
+        $sent = 0;
+        $sent += $this->notify($dueSoon, 'due to renew soon', fn ($order) => [
+            'subscription_expire', [Carbon::parse($order->renew_date)->format('Y-m-d')],
+        ]);
+
+        $sent += $this->notify($expired, 'past their renewal date', fn ($order) => [
+            'subscription_expire', [Carbon::parse($order->renew_date)->format('Y-m-d')],
+        ]);
+
+        $sent += $this->notify($onHold, 'on hold', fn ($order) => [
+            'hold_cars', [Carbon::parse($order->renew_date)->format('Y-m-d')],
+        ]);
+
+        $sent += $this->notify($lowCloths, 'low on cloths', fn ($order) => [
+            'lower_cloth_count_cutomer', [],
+        ]);
+
+        if (! $this->dryRun) {
+            Log::info('Renewal notification run complete.', ['messages' => $sent]);
+        }
+
+        $this->info($this->dryRun ? 'Dry run finished.' : $sent.' reminder(s) sent.');
+
+        return self::SUCCESS;
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection  $orders
+     * @param  callable  $message  Returns [template, arguments] for an order
+     */
+    private function notify($orders, string $label, callable $message): int
+    {
+        if ($orders->isEmpty()) {
+            $this->line('None '.$label.'.');
+
+            return 0;
+        }
+
+        $this->line($orders->count().' '.$label.'.');
+
+        $sent = 0;
+
         foreach ($orders as $order) {
-            if (!empty($order->email)) {
-                $carbonRenewDate = \Carbon\Carbon::parse($order->renew_date);
-                // Format the renewal date
-                $formattedRenewDate = $carbonRenewDate->format('d/m/Y');
-                $message = "Dear Customer, 
-        
-                Your car subscription expired on $formattedRenewDate
-                
-                As per the system in place, there will be a 1-week grace period, and after that, cleaning will be stopped. Please renew.
-                 
-                Go to the renew section at
-                https://www.eswachh.in
-                
-                You can renew for 3/6 months to save 75/300.
-                
-                Thanks
-                Team eSwachh";
+            $mobile = optional($order->user)->mobile;
 
-                $content = [
-                    'subject' => 'Renewal Reminder',
-                    'body' => $message
-                ];
+            if (! $mobile) {
+                continue;
+            }
 
-                // Mail::to($order->email)->send(new KuMail($content));
-                SMSService::sendWhatsAppMsg($order->mobile, 'subscription_expire', [$formattedRenewDate]);
+            [$template, $arguments] = $message($order);
+
+            if ($this->dryRun) {
+                $this->line('  would send "'.$template.'" to order '.$order->id.' ('.$order->car_number.')');
+                continue;
+            }
+
+            try {
+                SMSService::sendWhatsAppMsg($mobile, $template, $arguments);
+                $sent++;
+            } catch (\Throwable $e) {
+                // A single failed message must not abort the whole run.
+                Log::error('Reminder could not be sent.', [
+                    'order_id' => $order->id,
+                    'template' => $template,
+                    'error' => $e->getMessage(),
+                ]);
             }
         }
 
-        $orders = User::join('orders', 'users.id', '=', 'orders.user_id')
-            ->where('orders.cloth_service', 1)
-            ->where('orders.cloth_count', '<=', 10)
-            ->get(['users.mobile']);
-        foreach ($orders as $order) {
-            SMSService::sendWhatsAppMsg($order->mobile, 'lower_cloth_count_cutomer');
-        }
-
-        $this->info('Renewal notifications sent successfully.');
+        return $sent;
     }
 }

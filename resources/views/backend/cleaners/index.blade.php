@@ -10,6 +10,7 @@
 <?php
     $user = auth()->user();
     $roles = !empty($user)?$user->roles()->pluck('name')[0]:'';
+    $isFranchiseOwner = !empty($user) && \App\Services\SectorService::isFranchiseOwner($user);
 ?>
 @section('content')
 <link href="https://cdn.jsdelivr.net/gh/gitbrent/bootstrap4-toggle@3.6.1/css/bootstrap4-toggle.min.css" rel="stylesheet">
@@ -30,8 +31,19 @@
             </x-backend.section-header> -->
             <div class="row mt-4">
                 <div class="col">
-                    @if($roles=='super admin')
+                    @if($roles=='super admin' || $isFranchiseOwner)
                     <div class="row mb-3 filterclass">
+                        <div class="col-sm-4">
+                            <label for="filter_sector_id" class="form-label">{{ __('Sector') }}</label>
+                            <select class="form-control select2" id="filter_sector_id" name="filter_sector_id">
+                                @if($canSeeAllSectors || count($sectorOptions) > 1)
+                                <option value="*">{{ $canSeeAllSectors ? __('All Sectors') : __('All My Sectors') }}</option>
+                                @endif
+                                @foreach($sectorOptions as $sector_id => $sector_name)
+                                <option value="{{ $sector_id }}" @if((string) $filter['filter_sector_id'] === (string) $sector_id) selected @endif>{{ $sector_name }}</option>
+                                @endforeach
+                            </select>
+                        </div>
                         <div class="col-sm-4">
                             <label for="filter_assigned_user_id" class="form-label">Cleaner Name</label>
                             <select class="form-control select2" id="filter_assigned_user_id" name="filter_assigned_user_id">
@@ -132,8 +144,12 @@
 <x-library.select2 />
 @push ("after-scripts")
 <script>
-    $('#filter_assigned_user_id,#filter_date').change(function() {
+    $('#filter_assigned_user_id,#filter_date,#filter_sector_id').change(function() {
         var url = '{{ route("backend.cleaners.index") }}?';
+        var filter_sector_id = $('#filter_sector_id').val();
+        if (filter_sector_id && filter_sector_id != '*') {
+            url += 'filter_sector_id=' + filter_sector_id + '&';
+        }
         var filter_assigned_user_id = $('#filter_assigned_user_id').val();
         if (filter_assigned_user_id!='*') {
             url += 'filter_assigned_user_id=' + filter_assigned_user_id + '&';

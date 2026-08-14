@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Models\Userprofile;
 use App\Models\UserProvider;
 use App\Notifications\UserAccountCreated;
+use App\Services\SectorService;
 use Carbon\Carbon;
 use Exception;
 use Illuminate\Http\Request;
@@ -21,6 +22,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Laracasts\Flash\Flash;
+use Modules\Sector\Models\Sector;
 use Yajra\DataTables\DataTables;
 use Illuminate\Support\Facades\DB;
 
@@ -54,6 +56,192 @@ class UserController extends Controller
 
         // module model name, path
         $this->module_model = "App\Models\User";
+    }
+
+    /**
+     * Limit a users query to the sectors the logged in user may see.
+     * Customers and cleaners both carry their sector on their own profile.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder  $query
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    private function scopeUsersToSectors($query)
+    {
+        return SectorService::scopeByUserSector($query, SectorService::allowedSectorIds(), 'users.id');
+    }
+
+    /**
+     * Sector rules per role.
+     *
+     * A Franchise Owner owns many sectors and is useless without at least one.
+     * A Cleaner works in exactly one sector, held on their own profile.
+     *
+     * @return array<string, mixed>
+     */
+    private function sectorAssignmentRules(Request $request, bool $creating = false)
+    {
+        $roles = (array) $request->input('roles', []);
+        $is_franchise_owner = in_array(SectorService::FRANCHISE_ROLE, $roles, true);
+        $is_cleaner = in_array(SectorService::CLEANER_ROLE, $roles, true);
+
+        // A cleaner always needs a sector. A Franchise Owner creating anybody
+        // must place them in a sector too, otherwise they would immediately
+        // lose sight of the person they just added.
+        $needs_sector = $creating && ($is_cleaner || SectorService::isFranchiseOwner());
+
+        return [
+            'sectors' => [$is_franchise_owner ? 'required' : 'nullable', 'array'],
+            'sectors.*' => ['integer', 'exists:sectors,id'],
+            'sector_id' => [$needs_sector ? 'required' : 'nullable', 'integer', 'exists:sectors,id'],
+        ];
+    }
+
+    /**
+     * Roles a Franchise Owner is allowed to hand out. They run their sectors,
+     * they do not appoint administrators or other franchises.
+     *
+     * @return array<int, string>
+     */
+    private function assignableRoleNames()
+    {
+        return [SectorService::CLEANER_ROLE];
+    }
+
+    /**
+     * Sectors offered on the create and edit forms. A Franchise Owner is only
+     * ever shown their own.
+     */
+    private function assignableSectors()
+    {
+        $query = Sector::where('status', 1)->orderBy('name');
+        $allowed = SectorService::allowedSectorIds();
+
+        if ($allowed !== null) {
+            $query->whereIn('id', $allowed);
+        }
+
+        return $query->get();
+    }
+
+    /**
+     * Roles offered on the create and edit forms.
+     */
+    private function assignableRoles()
+    {
+        $roles = Role::get();
+
+        if (! SectorService::isFranchiseOwner()) {
+            return $roles;
+        }
+
+        return $roles->whereIn('name', $this->assignableRoleNames())->values();
+    }
+
+    /**
+     * Refuse any attempt by a Franchise Owner to grant a role or a sector
+     * beyond their own reach.
+     *
+     * @return void
+     */
+    private function guardAssignment(Request $request)
+    {
+        if (! SectorService::isFranchiseOwner()) {
+            return;
+        }
+
+        foreach ((array) $request->input('roles', []) as $role) {
+            if (! in_array($role, $this->assignableRoleNames(), true)) {
+                abort(403, 'You may only create customers and cleaners.');
+            }
+        }
+
+        if ($request->filled('sector_id') && ! SectorService::canAccessSector($request->input('sector_id'))) {
+            abort(403, 'That sector is not yours.');
+        }
+
+        // Franchise Owners never hand out the multi-sector assignment or
+        // individual permissions; the role carries what is needed.
+        $request->merge(['sectors' => [], 'permissions' => []]);
+    }
+
+    /**
+     * Keep the sector assignment in step with the roles.
+     *
+     * Franchise Owner sectors live in the pivot; a user who loses that role
+     * keeps none. A Cleaner's single sector lives on their profile, the same
+     * place a customer's sector is stored.
+     *
+     * @param  \App\Models\User  $user
+     * @return void
+     */
+    private function syncSectors($user, Request $request)
+    {
+        $sectors = $user->hasRole(SectorService::FRANCHISE_ROLE)
+            ? (array) $request->input('sectors', [])
+            : [];
+
+        $user->sectors()->sync($sectors);
+
+        if ($request->filled('sector_id')) {
+            $sectorId = (int) $request->input('sector_id');
+
+            // Store the parents too. The profile screen cascades
+            // State > City > Area > Sector, so a sector on its own would show
+            // up as an empty Sector box.
+            Userprofile::where('user_id', $user->id)->update(
+                ['sector_id' => $sectorId] + SectorService::locationChainFor($sectorId)
+            );
+        }
+
+        SectorService::forgetCache($user->id);
+    }
+
+    /**
+     * Stop a Franchise Owner from opening a user outside their sectors.
+     * Everyone can always reach their own record.
+     *
+     * @param  int  $id
+     * @return void
+     */
+    private function guardUserSectorAccess($id)
+    {
+        $sectorIds = SectorService::allowedSectorIds();
+
+        if ($sectorIds === null || (int) $id === (int) auth()->id()) {
+            return;
+        }
+
+        $accessible = SectorService::scopeByUserSector(User::where('id', $id), $sectorIds, 'users.id')->exists();
+
+        if (! $accessible) {
+            abort(404);
+        }
+    }
+
+    /**
+     * Options for the State / City / Area / Sector / Society cascade on the
+     * profile form.
+     *
+     * The public form uses the api route for this, which has no session. This
+     * one runs behind auth, so a Franchise Owner is only offered their own
+     * sectors - the list is filtered as the form is used, not rejected on save.
+     *
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function locationOptions(Request $request)
+    {
+        $request->validate([
+            'parent_type' => 'required|string',
+            'parent_id' => 'required',
+        ]);
+
+        $html = '<option></option>';
+
+        foreach (SectorService::locationOptions($request->parent_type, $request->parent_id) as $option) {
+            $html .= '<option value="'.$option->id.'">'.e($option->name).'</option>';
+        }
+
+        return response()->json(['html' => $html, 'success' => true]);
     }
 
     /**
@@ -96,7 +284,15 @@ class UserController extends Controller
 
         $module_action = 'List';
 
-        $$module_name = $module_model::select('id', 'name', 'username', 'email', 'email_verified_at', 'updated_at', 'status');
+        // Roles are rendered for every row, so they are loaded in one query.
+        $$module_name = $module_model::with('roles')
+            ->select('id', 'name', 'username', 'email', 'email_verified_at', 'updated_at', 'status');
+
+        $$module_name = SectorService::scopeByUserSector(
+            $$module_name,
+            SectorService::allowedSectorIds(),
+            'users.id'
+        );
 
         $data = $$module_name;
 
@@ -155,22 +351,27 @@ class UserController extends Controller
 
         $term = trim($request->q);
 
-        if (empty($term)) {
-            return response()->json([]);
-        }
-
-        // $query_data = $module_model::where('name', 'LIKE', "%$term%")->orWhere('email', 'LIKE', "%$term%")->limit(10)->get();
-        $query_data = $module_model::where(function ($query) use ($term) {
-            $query->where('name', 'LIKE', "%$term%")
-                ->orWhere('email', 'LIKE', "%$term%");
+        // With no search term the picker still offers the first few matches,
+        // the same way the other select2 endpoints behave. Returning nothing
+        // made the cleaner dropdown on the order form look empty until you
+        // happened to type a letter.
+        $query_data = $module_model::when($term !== '', function ($query) use ($term) {
+            $query->where(function ($inner) use ($term) {
+                $inner->where('name', 'LIKE', "%$term%")
+                    ->orWhere('email', 'LIKE', "%$term%");
+            });
         })
             ->whereHas('roles', function ($query) use ($request) {
                 if (!empty($request->user_type)) {
                     $query->where('name', '=', $request->user_type);
                 }
-            })
-            ->limit(10)
-            ->get();
+            });
+
+        // A Franchise Owner only picks from people in their own sectors, both
+        // in the customer picker and the cleaner picker on the order form.
+        $query_data = $this->scopeUsersToSectors($query_data);
+
+        $query_data = $query_data->limit(10)->get();
 
         $$module_name = [];
 
@@ -200,12 +401,17 @@ class UserController extends Controller
 
         $module_action = 'Create';
 
-        $roles = Role::get();
+        $roles = $this->assignableRoles();
         $permissions = Permission::select('name', 'id')->get();
+        $sectors = $this->assignableSectors();
+        $userSectors = [];
+        $userSectorId = null;
+        $showCleanerSector = true;
+        $sectorAlwaysRequired = SectorService::isFranchiseOwner();
 
         return view(
             "backend.$module_name.create",
-            compact('module_title', 'module_name', 'module_path', 'module_icon', 'module_action', 'module_name_singular', 'roles', 'permissions')
+            compact('module_title', 'module_name', 'module_path', 'module_icon', 'module_action', 'module_name_singular', 'roles', 'permissions', 'sectors', 'userSectors', 'userSectorId', 'showCleanerSector', 'sectorAlwaysRequired')
         );
     }
 
@@ -225,14 +431,21 @@ class UserController extends Controller
 
         $module_action = 'Details';
 
-        $request->validate([
+        $this->guardAssignment($request);
+
+        // A cleaner's sector is only asked for here, at creation. Afterwards it
+        // is maintained on the Edit Profile screen along with the rest of their
+        // location, so it is not required again on update.
+        $request->validate($this->sectorAssignmentRules($request, true) + [
             'first_name' => 'required',
             'last_name' => 'required',
             'email' => 'required|email|unique:users',
             'password' => 'required|confirmed|min:4',
         ]);
 
-        $data_array = $request->except('_token', 'roles', 'permissions', 'password_confirmation');
+        // 'sectors' and 'sector_id' are not columns on users: they are stored
+        // in the sector_user pivot and on the profile respectively.
+        $data_array = $request->except('_token', 'roles', 'permissions', 'sectors', 'sector_id', 'password_confirmation');
         $data_array['name'] = $request->first_name . ' ' . $request->last_name;
         $data_array['password'] = Hash::make($request->password);
 
@@ -269,7 +482,11 @@ class UserController extends Controller
         $$module_name_singular->username = $username;
         $$module_name_singular->save();
 
+        // After UserCreated: that event is what creates the profile row a
+        // cleaner's sector is written to.
         event(new UserCreated($$module_name_singular));
+
+        $this->syncSectors($$module_name_singular, $request);
 
         Flash::success("<i class='fas fa-check'></i> New '" . Str::singular($module_title) . "' Created")->important();
 
@@ -304,6 +521,8 @@ class UserController extends Controller
 
         $module_action = 'Show';
 
+        $this->guardUserSectorAccess($id);
+
         $$module_name_singular = $module_model::findOrFail($id);
         $userprofile = Userprofile::where('user_id', $$module_name_singular->id)->first();
         //echo"<pre>";print_r($userprofile);die;
@@ -330,6 +549,8 @@ class UserController extends Controller
         $module_model = $this->module_model;
         $module_name_singular = Str::singular($module_name);
         $module_action = 'Profile Show';
+
+        $this->guardUserSectorAccess($id);
 
         $$module_name_singular = $module_model::with('roles', 'permissions')->findOrFail($id);
 
@@ -366,9 +587,21 @@ class UserController extends Controller
             $id = auth()->user()->id;
         }
 
+        $this->guardUserSectorAccess($id);
+
         $$module_name_singular = $module_model::findOrFail($id);
         $userprofile = Userprofile::where('user_id', $$module_name_singular->id)->first();
         $stateList = DB::table('states')->where('status', 1)->get();
+
+        // An older profile may carry only a sector, with no state, city or area
+        // to cascade from. Fill the parents in so the saved sector is visible.
+        if ($userprofile && $userprofile->sector_id && ! $userprofile->area_id) {
+            foreach (SectorService::locationChainFor($userprofile->sector_id) as $field => $value) {
+                if (empty($userprofile->$field)) {
+                    $userprofile->$field = $value;
+                }
+            }
+        }
 
         Log::info(label_case($module_title . ' ' . $module_action) . ' | User:' . auth()->user()->name . '(ID:' . auth()->user()->id . ')');
 
@@ -403,6 +636,14 @@ class UserController extends Controller
 
         if (!auth()->user()->can('edit_users')) {
             $id = auth()->user()->id;
+        }
+
+        // The sector dropdown on this form is already filtered, so these two
+        // only fire if the request was crafted by hand.
+        $this->guardUserSectorAccess($id);
+
+        if ($request->filled('sector_id') && ! SectorService::canAccessSector($request->input('sector_id'))) {
+            abort(403, 'That sector is not yours.');
         }
 
         $$module_name_singular = User::findOrFail($id);
@@ -573,6 +814,8 @@ class UserController extends Controller
             abort(404);
         }
 
+        $this->guardUserSectorAccess($id);
+
         $module_title = $this->module_title;
         $module_name = $this->module_name;
         $module_path = $this->module_path;
@@ -587,14 +830,21 @@ class UserController extends Controller
         $userRoles = $$module_name_singular->roles->pluck('name')->all();
         $userPermissions = $$module_name_singular->permissions->pluck('name')->all();
 
-        $roles = Role::get();
+        $roles = $this->assignableRoles();
         $permissions = Permission::where('deleted_at', null)->select('name', 'id')->get();
+        $sectors = $this->assignableSectors();
+        $userSectors = $$module_name_singular->sectors->pluck('id')->all();
+        $userSectorId = optional(Userprofile::where('user_id', $id)->first())->sector_id;
+        // Editing an existing cleaner's sector is done on the Edit Profile
+        // screen, which already carries the full location cascade.
+        $showCleanerSector = false;
+        $sectorAlwaysRequired = SectorService::isFranchiseOwner();
 
         Log::info(label_case($module_title . ' ' . $module_action) . " | '" . $$module_name_singular->name . '(ID:' . $$module_name_singular->id . ") ' by User:" . auth()->user()->name . '(ID:' . auth()->user()->id . ')');
 
         return view(
             "backend.$module_name.edit",
-            compact('module_title', 'module_name', 'module_path', 'module_icon', 'module_action', 'module_name_singular', "$module_name_singular", 'roles', 'permissions', 'userRoles', 'userPermissions')
+            compact('module_title', 'module_name', 'module_path', 'module_icon', 'module_action', 'module_name_singular', "$module_name_singular", 'roles', 'permissions', 'userRoles', 'userPermissions', 'sectors', 'userSectors', 'userSectorId', 'showCleanerSector', 'sectorAlwaysRequired')
         );
     }
 
@@ -629,9 +879,14 @@ class UserController extends Controller
         //     'url_linkedin'  => 'nullable|min:3|max:191',
         // ]);
 
+        $this->guardUserSectorAccess($id);
+        $this->guardAssignment($request);
+
+        $request->validate($this->sectorAssignmentRules($request));
+
         $$module_name_singular = User::findOrFail($id);
 
-        $$module_name_singular->update($request->except(['roles', 'permissions']));
+        $$module_name_singular->update($request->except(['roles', 'permissions', 'sectors', 'sector_id']));
 
         if ($id == 1) {
             $user->syncRoles(['super admin']);
@@ -657,6 +912,8 @@ class UserController extends Controller
             $permissions = [];
             $$module_name_singular->syncPermissions($permissions);
         }
+
+        $this->syncSectors($$module_name_singular, $request);
 
         event(new UserUpdated($$module_name_singular));
 

@@ -298,9 +298,12 @@ function getLocationInfos(type, id) {
         if (type != '' && id != '') {
             $('#page-loader').show();
             $.ajax({
-                url: '{{ route("frontend.orders.location") }}',
+                // Backend route: it runs behind the session, so the options
+                // come back already limited to the sectors this user may pick.
+                url: '{{ route("backend.users.locationOptions") }}',
                 method: 'POST',
                 data: {
+                    _token: '{{ csrf_token() }}',
                     parent_type: type,
                     parent_id: id,
                 },

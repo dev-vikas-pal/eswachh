@@ -26,3 +26,6 @@ yarn-error.log
 
 
 
+
+# The vendor proposal is not source; keep it out of the repo
+docs/eSwachh_Proposal_EN_new.pdf

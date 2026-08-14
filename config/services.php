@@ -49,4 +49,33 @@ return [
         'redirect' => env('GOOGLE_REDIRECT'),
     ],
 
+    /*
+     * Read through config rather than calling env() at runtime. env() returns
+     * null once config is cached, which would silently break every payment.
+     */
+    'razorpay' => [
+        'key' => env('RAZOR_KEY'),
+        'secret' => env('RAZOR_SECRET'),
+    ],
+
+    'msg91' => [
+        'auth_token' => env('MSG91_AUTH_TOKEN'),
+        'whatsapp_number' => env('MSG91_WHATSAPP_NUMBER'),
+
+        /*
+         * Whether messages actually leave the building.
+         *
+         * Unset means "only from production", so a developer working against a
+         * copy of live data cannot WhatsApp real customers. Everywhere else the
+         * message is written to the log instead, including OTPs, which is how
+         * you complete a signup locally. Set SMS_ENABLED=true to force real
+         * sending, or false to silence it in production too.
+         */
+        'enabled' => env('SMS_ENABLED'),
+    ],
+
+    'twofactor' => [
+        'key' => env('2FA_SMS_API_KEY'),
+    ],
+
 ];

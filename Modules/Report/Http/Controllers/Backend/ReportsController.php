@@ -4,6 +4,7 @@ namespace Modules\Report\Http\Controllers\Backend;
 
 use App\Authorizable;
 use App\Http\Controllers\Backend\BackendBaseController;
+use App\Services\SectorService;
 use Illuminate\Support\Facades\DB;
 use Yajra\DataTables\DataTables;
 use Carbon\Carbon;
@@ -51,24 +52,35 @@ class ReportsController extends BackendBaseController
     }
     public function clothReportData()
     {
-        $clothQuery = DB::table('cloth_services')->select();
+        // The cleaner name is joined in rather than looked up once per row.
+        $clothQuery = DB::table('cloth_services')
+            ->leftJoin('users', 'users.id', '=', 'cloth_services.created_by')
+            ->select('cloth_services.*', 'users.name as cleaner_name');
 
         $request = request()->all();
 
-        if (!empty($request['filter_status']) && $request['filter_status'] != '*') {
-            $clothQuery = $clothQuery->where('status', $request['filter_status']);
+        // Cloth services belong to the sector of the order they were done for.
+        $sectorIds = SectorService::selectedSectorIds($request['filter_sector_id'] ?? null);
+
+        if ($sectorIds !== null) {
+            $clothQuery = $clothQuery->whereIn('cloth_services.order_id', function ($sub) use ($sectorIds) {
+                $sub->select('id')->from('orders')->whereIn('sector_id', $sectorIds);
+            });
         }
-        if (!empty($request['filter_package_id']) && $request['filter_package_id'] != '*') {
-            $clothQuery = $clothQuery->where('package_id', $request['filter_package_id']);
+
+        // Column names are qualified: users is joined in and shares several of
+        // these column names with cloth_services.
+        if (!empty($request['filter_status']) && $request['filter_status'] != '*') {
+            $clothQuery = $clothQuery->where('cloth_services.status', $request['filter_status']);
         }
         if (!empty($request['created_by']) && $request['created_by'] != '*') {
-            $clothQuery = $clothQuery->where('created_by', $request['created_by']);
+            $clothQuery = $clothQuery->where('cloth_services.created_by', $request['created_by']);
         }
         if (!empty($request['filter_cloth_count']) && $request['filter_cloth_count'] != '*') {
-            $clothQuery = $clothQuery->where('cloth_count', $request['filter_cloth_count']);
+            $clothQuery = $clothQuery->where('cloth_services.cloth_count', $request['filter_cloth_count']);
         }
         if (!empty($request['filter_date']) && $request['filter_date'] != '*') {
-            $clothQuery = $clothQuery->whereDate('date', $request['filter_date']);
+            $clothQuery = $clothQuery->whereDate('cloth_services.date', $request['filter_date']);
         }
         $clothOrders = $clothQuery->get();
         return Datatables::of($clothOrders)
@@ -76,7 +88,7 @@ class ReportsController extends BackendBaseController
                 return Carbon::parse($data->date)->format('d-m-Y');
             })
             ->editColumn('cleaner_name', function ($data) {
-                return User::find($data->created_by)->name??'NA';
+                return $data->cleaner_name ?? 'NA';
             })
             ->rawColumns(['name', 'action'])
             ->make(true);

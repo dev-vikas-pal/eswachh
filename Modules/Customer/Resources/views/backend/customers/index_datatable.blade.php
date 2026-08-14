@@ -151,15 +151,15 @@ $module_name = 'customers';
         },
         columns: [{
                 data: 'id',
-                name: 'id'
+                name: 'users.id'
             },
             {
                 data: 'name',
-                name: 'name'
+                name: 'users.name'
             },
             {
                 data: 'email',
-                name: 'email'
+                name: 'users.email'
             },
             {
                 data: 'address',
@@ -169,7 +169,7 @@ $module_name = 'customers';
             },
             {
                 data: 'status',
-                name: 'status'
+                name: 'users.status'
             },
             {
                 data: 'user_roles',

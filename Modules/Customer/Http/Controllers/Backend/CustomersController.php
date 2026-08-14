@@ -4,6 +4,7 @@ namespace Modules\Customer\Http\Controllers\Backend;
 
 use App\Authorizable;
 use App\Http\Controllers\Backend\BackendBaseController;
+use App\Services\SectorService;
 use Illuminate\Support\Str;
 use Yajra\DataTables\DataTables;
 use Carbon\Carbon;
@@ -43,7 +44,23 @@ class CustomersController extends BackendBaseController
 
         $module_action = 'List';
 
-        $$module_name = User::select('id', 'name', 'username', 'email', 'email_verified_at', 'updated_at', 'status');
+        // Address is joined in rather than looked up per row, which also
+        // removes the crash when a user has no profile row.
+        // Roles are rendered for every row, so they are loaded in one query.
+        $$module_name = User::with('roles')
+            ->leftJoin('userprofiles', 'userprofiles.user_id', '=', 'users.id')
+            ->leftJoin('societies', 'societies.id', '=', 'userprofiles.society_id')
+            ->select(
+                'users.id',
+                'users.name',
+                'users.username',
+                'users.email',
+                'users.email_verified_at',
+                'users.updated_at',
+                'users.status',
+                'userprofiles.house_no',
+                'societies.name as society_name'
+            );
         $request = request()->all();
         if (!empty($request['user_type']) && $request['user_type'] != '*') {
             $$module_name->whereHas('roles', function ($query) use ($request) {
@@ -52,6 +69,14 @@ class CustomersController extends BackendBaseController
                 }
             });
         }
+
+        // A Franchise Owner only sees the people in their own sectors.
+        $$module_name = SectorService::scopeByUserSector(
+            $$module_name,
+            SectorService::selectedSectorIds($request['filter_sector_id'] ?? null),
+            'users.id'
+        );
+
         $data = $$module_name;
 
         return Datatables::of($$module_name)
@@ -71,21 +96,7 @@ class CustomersController extends BackendBaseController
 
                 return $return_data;
             })->editColumn('address', function ($data) {
-                $userprofile = DB::table('userprofiles')->where('user_id', $data->id)->first();
-                $location = DB::table('cities')
-                ->join('areas', 'areas.city_id', '=', 'cities.id')
-                ->join('sectors', 'sectors.area_id', '=', 'areas.id')
-                ->join('societies', 'societies.sector_id', '=', 'sectors.id')
-                ->where([
-                    ['cities.id', $userprofile->city_id],
-                    ['areas.id', $userprofile->area_id],
-                    ['sectors.id', $userprofile->sector_id],
-                    ['societies.id', $userprofile->society_id],
-                ])
-                ->select('cities.name as city_name', 'areas.name as area_name', 'sectors.name as sector_name', 'societies.name as society_name')
-                ->first();
-              //  return $location ? "{$location->city_name}, {$location->area_name}, {$location->sector_name}, {$location->society_name}, {$userprofile->house_no}" : '';
-                return $location ? "{$location->society_name}, {$userprofile->house_no}" : '';
+                return $data->society_name ? "{$data->society_name}, {$data->house_no}" : '';
             })
             ->editColumn('updated_at', function ($data) {
                 $module_name = $this->module_name;

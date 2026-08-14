@@ -4,6 +4,7 @@ namespace Modules\Order\Http\Controllers\Backend;
 
 use App\Authorizable;
 use App\Http\Controllers\Backend\BackendBaseController;
+use App\Services\SectorService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -16,7 +17,7 @@ use Modules\Internaltype\Models\Internaltype;
 use Modules\Duration\Models\Duration;
 use Modules\Order\Models\Order;
 use Modules\Cloth\Models\Cloth;
-use Razorpay\Api\Api;
+use App\Services\RazorpayService;
 use App\Services\SMSService;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
@@ -44,6 +45,58 @@ class OrdersController extends BackendBaseController
         // module model name, path
         $this->module_model = "Modules\Order\Models\Order";
     }
+
+    /**
+     * Stop a Franchise Owner from reaching an order outside their sectors.
+     * Answers with a 404 rather than a 403 so the existence of orders in other
+     * sectors is not disclosed.
+     *
+     * @param  int  $id
+     * @return void
+     */
+    private function guardSectorAccess($id)
+    {
+        $sectorIds = SectorService::allowedSectorIds();
+
+        if ($sectorIds === null) {
+            return;
+        }
+
+        if (! Order::where('id', $id)->whereIn('sector_id', $sectorIds)->exists()) {
+            abort(404);
+        }
+    }
+
+    /**
+     * Stop a Franchise Owner from booking an order for a customer that lives
+     * in somebody else's sector.
+     *
+     * @param  int|null  $user_id
+     * @return void
+     */
+    private function guardCustomerSector($user_id)
+    {
+        if (! SectorService::canAccessSector(Order::resolveSectorIdForUser($user_id))) {
+            abort(403, 'This customer belongs to another sector.');
+        }
+    }
+
+    /**
+     * Normalise a cloth id coming from a request or from Razorpay notes.
+     *
+     * Razorpay returns every note as a string, and a select with nothing
+     * chosen posts the literal "null", which the null coalescing operator does
+     * not catch. Writing that straight to orders.cloth_id, an integer column,
+     * fails with "Incorrect integer value: 'null'".
+     *
+     * @param  mixed  $value
+     * @return int
+     */
+    private function clothId($value)
+    {
+        return is_numeric($value) ? (int) $value : 0;
+    }
+
     public function topUp(Request $request, $orderId)
     {
         $user = auth()->user();
@@ -78,7 +131,7 @@ class OrdersController extends BackendBaseController
         $user = auth()->user();
         $order = Order::where('user_id', $user->id)->where('id', $request->order_id)->firstOrFail();
         $cloth = Cloth::where('id', $request->cloth_id)->firstOrFail();
-        $api = new Api(env('RAZOR_KEY'), env('RAZOR_SECRET'));
+        $api = RazorpayService::api();
         $razorPayorder = $api->order->create([
             'amount' => $cloth->price * 100,
             'currency' => 'INR',
@@ -91,63 +144,86 @@ class OrdersController extends BackendBaseController
                 'cloth_id' => $cloth->id ?? 0,
             ],
         ]);
-        Log::info("Sending request to Razorpay for cloth topup");
-        Log::info("Request => " . print_r($order, true));
+        Log::info('Razorpay order created for cloth top up.', ['razorpay_order_id' => $razorPayorder->id, 'order_id' => $order->id]);
+
+        RazorpayService::recordInitiated($razorPayorder->id, $order, $user->id, 'Cloth', $cloth->price);
         return response()->json(['success' => true, 'razorpay_order_id' => $razorPayorder->id]);
     }
     public function addTopUpComplete(Request $request)
     {
         $input = $request->all();
-        Log::info("Receiving response from Razorpay for cloth topup");
-        Log::info("Response => " . print_r($input, true));
-        $api = new Api(env('RAZOR_KEY'), env('RAZOR_SECRET'));
-        $payment = $api->payment->fetch($input['razorpay_payment_id']);
-        $local_order_id = $payment['notes']['local_order_id'] ?? '';
-        $cloth_id = $payment['notes']['cloth_id'] ?? '';
+        Log::info('Razorpay callback for cloth top up.', [
+            'razorpay_payment_id' => $input['razorpay_payment_id'] ?? null,
+        ]);
 
-        if (count($input)  && !empty($input['razorpay_payment_id'])) {
-            try {
-                $acquirerData = $payment['acquirer_data'];
-                $order = Order::find($local_order_id);
-                $cloth = Cloth::find($cloth_id);
-                if ($order) {
-                    $user = auth()->user();
-                    $oldOrder = $order->replicate();
-                    DB::table('order_history')->insert([
-                        'order_id' => $order->id,
-                        'order_data' => json_encode($oldOrder->toArray()),
-                        'created_by' => $user->id,
-                        'updated_by' => $user->id,
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]);
+        if (empty($input['razorpay_payment_id'])) {
+            \Session::put('error', 'We did not receive a payment reference. Please try again.');
 
-                    $order->cloth_id = $cloth_id;
-                    $order->cloth_count = $order->cloth_count + $cloth->count;
-                    $order->save();
-                    SMSService::sendWhatsAppMsg($order->user->mobile, 'cloth_topup_notification_customer', [$cloth->name ?? '', $order->cloth_count]);
-                }
-            } catch (\Exception $e) {
-                return  $e->getMessage();
-                \Session::put('error', $e->getMessage());
-                return redirect()->back();
-            }
+            return redirect()->route('backend.orders.index');
         }
-        $paymentData = [
-            'user_id' => $user->id ?? 0,
-            'order_id' => $order->id ?? 0,
-            'payment_amount' => $payment['amount'] / 100,
-            'currency' => 'INR',
-            'payment_status' => $payment['status'] ?? 'Pending',
-            'payment_method' => $payment['method'] ?? '',
-            'payment_date_time' => now(),
-            'transaction_id' => $acquirerData->upi_transaction_id ?? '',
-            'payment_gateway' => 'Razorpay',
-            'payment_for' => 'Cloth',
-        ];
-        DB::table('payment_history')->insert($paymentData);
-        $message = 'Payment successful, your cloth count has been increased successfully.';
-        \Session::put('success', $message);
+
+        if (! RazorpayService::signatureIsValid($input)) {
+            \Session::put('error', 'This payment could not be verified. Please contact support.');
+
+            return redirect()->route('backend.orders.index');
+        }
+
+        $payment = RazorpayService::api()->payment->fetch($input['razorpay_payment_id']);
+
+        $order = Order::find($payment['notes']['local_order_id'] ?? null);
+        $cloth_id = $this->clothId($payment['notes']['cloth_id'] ?? 0);
+
+        // Without this a refreshed callback would top the cloth count up twice.
+        if (RazorpayService::alreadyProcessed($payment['id'])) {
+            Log::info('Razorpay cloth top up already processed; ignoring repeat callback.', [
+                'razorpay_payment_id' => $payment['id'],
+            ]);
+
+            return redirect()->route('backend.orders.show', ['order' => $order]);
+        }
+
+        RazorpayService::record($payment, $order, optional(auth()->user())->id ?? optional($order)->user_id, 'Cloth');
+
+        if (! $order) {
+            Log::error('Razorpay cloth top up has no matching order.', [
+                'razorpay_payment_id' => $payment['id'],
+            ]);
+
+            \Session::put('error', 'Your payment was received but we could not match it to an order. Our team will contact you.');
+
+            return redirect()->route('backend.orders.index');
+        }
+
+        try {
+            $cloth = Cloth::find($cloth_id);
+            $actorId = optional(auth()->user())->id ?? $order->user_id;
+
+            DB::transaction(function () use ($order, $cloth, $cloth_id, $actorId) {
+                DB::table('order_history')->insert([
+                    'order_id' => $order->id,
+                    'order_data' => json_encode($order->replicate()->toArray()),
+                    'created_by' => $actorId,
+                    'updated_by' => $actorId,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+
+                $order->cloth_id = $cloth_id;
+                $order->cloth_count = $order->cloth_count + ($cloth->count ?? 0);
+                $order->save();
+            });
+
+            if ($mobile = optional($order->user)->mobile) {
+                SMSService::sendWhatsAppMsg($mobile, 'cloth_topup_notification_customer', [$cloth->name ?? '', $order->cloth_count]);
+            }
+        } catch (\Throwable $e) {
+            \Session::put('error', RazorpayService::reportFailure($e, $payment, $order));
+
+            return redirect()->route('backend.orders.show', ['order' => $order]);
+        }
+
+        \Session::put('success', 'Payment successful, your cloth count has been increased successfully.');
+
         return redirect()->route('backend.orders.show', ['order' => $order]);
     }
     public function renew(Request $request)
@@ -208,7 +284,7 @@ class OrdersController extends BackendBaseController
             $new_order = false;
         }
 
-        $api = new Api(env('RAZOR_KEY'), env('RAZOR_SECRET'));
+        $api = RazorpayService::api();
         $local_order_id = $$module_name_singular->id;
         $order = new Order();
         $response = $order->getPrice($request);
@@ -227,11 +303,12 @@ class OrdersController extends BackendBaseController
                 'pakage_type' => $request->pakage_type,
                 'cleaning_type' => $request->cleaning_type,
                 'cloth_service' => $request->cloth_service ?? 0,
-                'cloth_id' => $request->cloth_id ?? 0,
+                'cloth_id' => $this->clothId($request->cloth_id),
             ],
         ]);
-        Log::info("Sending request to Razorpay for payment capture");
-        Log::info("Request => " . print_r($order, true));
+        Log::info('Razorpay order created for renewal.', ['razorpay_order_id' => $order->id]);
+
+        RazorpayService::recordInitiated($order->id, $$module_name_singular, $user->id, 'Subscription', $final_price);
 
         return response()->json(['success' => true, 'razorpay_order_id' => $order->id]);
     }
@@ -305,7 +382,7 @@ class OrdersController extends BackendBaseController
             $new_order = false;
         }
 
-        $api = new Api(env('RAZOR_KEY'), env('RAZOR_SECRET'));
+        $api = RazorpayService::api();
         $local_order_id = $$module_name_singular->id;
         $order = new Order();
         $response = $order->getPrice($request);
@@ -324,11 +401,12 @@ class OrdersController extends BackendBaseController
                 'pakage_type' => $request->pakage_type,
                 'cleaning_type' => $request->cleaning_type,
                 'cloth_service' => $request->cloth_service ?? 0,
-                'cloth_id' => $request->cloth_id ?? 0,
+                'cloth_id' => $this->clothId($request->cloth_id),
             ],
         ]);
-        Log::info("Sending request to Razorpay for payment capture");
-        Log::info("Request => " . print_r($order, true));
+        Log::info('Razorpay order created for renewal.', ['razorpay_order_id' => $order->id]);
+
+        RazorpayService::recordInitiated($order->id, $$module_name_singular, $user->id, 'Subscription', $final_price);
 
         return response()->json(['success' => true, 'name' => $user->name, 'mobile' => $user->mobile, 'email' => $user->email, 'razorpay_order_id' => $order->id]);
     }
@@ -336,194 +414,183 @@ class OrdersController extends BackendBaseController
     public function loginFreerenewComplete(Request $request)
     {
         $input = $request->all();
-        Log::info("Receiving response from Razorpay for payment capture");
-        Log::info("Response => " . print_r($input, true));
-        $api = new Api(env('RAZOR_KEY'), env('RAZOR_SECRET'));
-        if (!empty($input['razorpay_payment_id'])) {
-            $payment = $api->payment->fetch($input['razorpay_payment_id']);
-            $local_order_id = $payment['notes']['local_order_id'] ?? '';
-            $pakage_type = $payment['notes']['pakage_type'] ?? '';
-            $cleaning_type = $payment['notes']['cleaning_type'] ?? '';
-            $cloth_service = $payment['notes']['cloth_service'] ?? 0;
-            $new_order = $payment['notes']['new_order'] ?? false;
-            $cloth_id = $payment['notes']['cloth_id'] ?? '';
+        Log::info('Razorpay callback for login free renewal.', [
+            'razorpay_payment_id' => $input['razorpay_payment_id'] ?? null,
+        ]);
 
-            if (count($input)) {
-                try {
-                    $acquirerData = $payment['acquirer_data'];
-                    $order = Order::find($local_order_id);
-                    $cloth = Cloth::find($cloth_id);
-                    $clothCount = $cloth->count ?? 0;
-                    if ($order) {
-                        //  $user = auth()->user();
-                        $oldOrder = $order->replicate();
-                        DB::table('order_history')->insert([
-                            'order_id' => $order->id,
-                            'order_data' => json_encode($oldOrder->toArray()),
-                            'created_by' => $order->user_id,
-                            'updated_by' => $order->user_id,
-                            'created_at' => now(),
-                            'updated_at' => now(),
-                        ]);
+        if (empty($input['razorpay_payment_id'])) {
+            \Session::put('error', 'We did not receive a payment reference. Please try again.');
 
-                        $duration = Duration::where('id', $pakage_type)->select('duration')->first();
-                        $order->razorpay_order_id = $payment['order_id'];
-                        $order->pakage_type = $pakage_type;
-                        $order->cleaning_type = $cleaning_type;
-                        $order->cloth_service = $cloth_service;
-                        $order->cloth_id = $cloth_id;
-                        $order->cloth_count = $order->cloth_count + $clothCount;
-                        $order->status = $payment['status'] == 'captured' ? 2 : 1;
-                        $order->amount = $payment['amount'] / 100;
-                        $order->paid_amount = $payment['amount'] / 100;
-                        $order->payment_date = Carbon::now();
-
-                        //$order->start_date = Carbon::now();
-                        //$order->renew_date = Carbon::now()->addMonths($duration->duration);
-
-                        $currentDate = Carbon::now();
-                        $order->renew_date = Carbon::parse($order->renew_date);
-                        // if ($order->renew_date->startOfDay() >= $currentDate->startOfDay()) {
-                        $order->start_date = Carbon::now();
-                        $order->renew_date = $order->renew_date->startOfDay()->addMonths($duration->duration);
-                        // } else {
-                        //     $order->renew_date = $currentDate->startOfDay()->addMonths($duration->duration);
-                        // }
-
-                        $order->payment_mode = $payment['method'];
-                        $order->transaction_id = $acquirerData->upi_transaction_id ?? '';
-                        $order->order_type = 'online';
-                        $order->payment_id = $payment['id'];
-                        $order->save();
-                        $user = User::find($order->user_id);
-
-                        $package = Package::where('id', $order->package_id)->select('name')->first();
-                        $clothService = $order->cloth_service == 1 ? "Yes - $cloth->name" : "No";
-                        if ($new_order) {
-                            SMSService::sendWhatsAppMsg($order->user->mobile, 'subscription_notification_customer2', [$package->name, $duration->duration, $order->car_number, $clothService, '****', '***']);
-                            SMSService::sendWhatsAppMsg('8650316068', 'subscription_notification_admin', [$order->car_number, $package->name, $duration->duration]);
-                        } else {
-                            SMSService::sendWhatsAppMsg($order->user->mobile, 'renew_notification_customer', [$package->name, $duration->duration, $order->car_number, $clothService]);
-                        }
-                    }
-                } catch (\Exception $e) {
-                    return  $e->getMessage();
-                    \Session::put('error', $e->getMessage());
-                    return redirect()->back();
-                }
-            }
-            $paymentData = [
-                'user_id' => $user->id ?? 0,
-                'order_id' => $order->id ?? 0,
-                'payment_amount' => $payment['amount'] / 100,
-                'currency' => 'INR',
-                'payment_status' => $payment['status'] ?? 'Pending',
-                'payment_method' => $payment['method'] ?? '',
-                'payment_date_time' => now(),
-                'transaction_id' => $acquirerData->upi_transaction_id ?? '',
-                'payment_gateway' => 'Razorpay',
-                'payment_for' => 'Subscription',
-            ];
-            DB::table('payment_history')->insert($paymentData);
-
-            \Session::put('success', 'Payment successful, your order has been placed successfully.');
+            return view("order::frontend.orders.success");
         }
+
+        if (! RazorpayService::signatureIsValid($input)) {
+            \Session::put('error', 'This payment could not be verified. Please contact support.');
+
+            return view("order::frontend.orders.success");
+        }
+
+        $payment = RazorpayService::api()->payment->fetch($input['razorpay_payment_id']);
+
+        $order = Order::find($payment['notes']['local_order_id'] ?? null);
+
+        if (RazorpayService::alreadyProcessed($payment['id'])) {
+            Log::info('Razorpay login free renewal already processed; ignoring repeat callback.', [
+                'razorpay_payment_id' => $payment['id'],
+            ]);
+
+            return view("order::frontend.orders.success");
+        }
+
+        RazorpayService::record($payment, $order, optional($order)->user_id, 'Subscription');
+
+        if (! $order) {
+            Log::error('Razorpay login free renewal has no matching order.', [
+                'razorpay_payment_id' => $payment['id'],
+            ]);
+
+            \Session::put('error', 'Your payment was received but we could not match it to an order. Our team will contact you.');
+
+            return view("order::frontend.orders.success");
+        }
+
+        try {
+            $this->applyRenewal($order, $payment);
+            \Session::put('success', 'Payment successful, your order has been placed successfully.');
+        } catch (\Throwable $e) {
+            \Session::put('error', RazorpayService::reportFailure($e, $payment, $order));
+        }
+
         return view("order::frontend.orders.success");
     }
     public function renewComplete(Request $request)
     {
         $input = $request->all();
-        Log::info("Receiving response from Razorpay for payment capture");
-        Log::info("Response => " . print_r($input, true));
-        $api = new Api(env('RAZOR_KEY'), env('RAZOR_SECRET'));
-        $payment = $api->payment->fetch($input['razorpay_payment_id']);
-        $local_order_id = $payment['notes']['local_order_id'] ?? '';
+        Log::info('Razorpay callback for renewal.', [
+            'razorpay_payment_id' => $input['razorpay_payment_id'] ?? null,
+        ]);
+
+        if (empty($input['razorpay_payment_id'])) {
+            \Session::put('error', 'We did not receive a payment reference. Please try again.');
+
+            return redirect()->route('backend.orders.index');
+        }
+
+        if (! RazorpayService::signatureIsValid($input)) {
+            \Session::put('error', 'This payment could not be verified. Please contact support.');
+
+            return redirect()->route('backend.orders.index');
+        }
+
+        $payment = RazorpayService::api()->payment->fetch($input['razorpay_payment_id']);
+
+        $order = Order::find($payment['notes']['local_order_id'] ?? null);
+
+        // Never renew twice off one payment.
+        if (RazorpayService::alreadyProcessed($payment['id'])) {
+            Log::info('Razorpay renewal already processed; ignoring repeat callback.', [
+                'razorpay_payment_id' => $payment['id'],
+            ]);
+
+            return redirect()->route('backend.orders.show', ['order' => $order]);
+        }
+
+        RazorpayService::record($payment, $order, optional($order)->user_id, 'Subscription');
+
+        if (! $order) {
+            Log::error('Razorpay renewal has no matching order.', [
+                'razorpay_payment_id' => $payment['id'],
+            ]);
+
+            \Session::put('error', 'Your payment was received but we could not match it to an order. Our team will contact you.');
+
+            return redirect()->route('backend.orders.index');
+        }
+
+        try {
+            $this->applyRenewal($order, $payment);
+        } catch (\Throwable $e) {
+            \Session::put('error', RazorpayService::reportFailure($e, $payment, $order));
+
+            return redirect()->route('backend.orders.show', ['order' => $order]);
+        }
+
+        \Session::put('success', 'Payment successful, your order has been placed successfully.');
+
+        return redirect()->route('backend.orders.show', ['order' => $order]);
+    }
+
+    /**
+     * Apply a captured renewal payment to an order.
+     *
+     * Shared by the logged in and the login free renewal callbacks, which
+     * previously carried two copies of this logic.
+     *
+     * @param  \Modules\Order\Models\Order  $order
+     * @param  \Razorpay\Api\Payment|array  $payment
+     * @return void
+     */
+    private function applyRenewal($order, $payment)
+    {
         $pakage_type = $payment['notes']['pakage_type'] ?? '';
         $cleaning_type = $payment['notes']['cleaning_type'] ?? '';
         $cloth_service = $payment['notes']['cloth_service'] ?? 0;
         $new_order = $payment['notes']['new_order'] ?? false;
-        $cloth_id = $payment['notes']['cloth_id'] ?? '';
+        $cloth_id = $this->clothId($payment['notes']['cloth_id'] ?? 0);
 
-        if (count($input)  && !empty($input['razorpay_payment_id'])) {
-            try {
-                $acquirerData = $payment['acquirer_data'];
-                $order = Order::find($local_order_id);
-                $cloth = Cloth::find($cloth_id);
-                $clothCount = $cloth->count ?? 0;
-                if ($order) {
-                    $user = auth()->user();
-                    $oldOrder = $order->replicate();
-                    DB::table('order_history')->insert([
-                        'order_id' => $order->id,
-                        'order_data' => json_encode($oldOrder->toArray()),
-                        'created_by' => $user->id,
-                        'updated_by' => $user->id,
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]);
+        $acquirerData = $payment['acquirer_data'] ?? null;
+        $cloth = Cloth::find($cloth_id);
+        $clothCount = $cloth->count ?? 0;
+        $duration = Duration::where('id', $pakage_type)->select('duration')->first();
+        $months = $duration->duration ?? 1;
 
-                    $duration = Duration::where('id', $pakage_type)->select('duration')->first();
-                    $order->razorpay_order_id = $payment['order_id'];
-                    $order->pakage_type = $pakage_type;
-                    $order->cleaning_type = $cleaning_type;
-                    $order->cloth_service = $cloth_service;
-                    $order->cloth_id = $cloth_id;
-                    $order->cloth_count = $order->cloth_count + $clothCount;
-                    $order->status = $payment['status'] == 'captured' ? 2 : 1;
-                    $order->amount = $payment['amount'] / 100;
-                    $order->paid_amount = $payment['amount'] / 100;
-                    $order->payment_date = Carbon::now();
+        DB::transaction(function () use ($order, $payment, $acquirerData, $pakage_type, $cleaning_type, $cloth_service, $cloth_id, $clothCount, $months) {
+            $actorId = optional(auth()->user())->id ?? $order->user_id;
 
-                    //$order->start_date = Carbon::now();
-                    //$order->renew_date = Carbon::now()->addMonths($duration->duration);
+            DB::table('order_history')->insert([
+                'order_id' => $order->id,
+                'order_data' => json_encode($order->replicate()->toArray()),
+                'created_by' => $actorId,
+                'updated_by' => $actorId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
 
-                    $currentDate = Carbon::now();
-                    $order->renew_date = Carbon::parse($order->renew_date);
-                    // if ($order->renew_date->startOfDay() >= $currentDate->startOfDay()) {
-                    $order->start_date = Carbon::now();
-                    $order->renew_date = $order->renew_date->startOfDay()->addMonths($duration->duration);
-                    // } else {
-                    //     $order->renew_date = $currentDate->startOfDay()->addMonths($duration->duration);
-                    // }
+            $order->razorpay_order_id = $payment['order_id'];
+            $order->pakage_type = $pakage_type;
+            $order->cleaning_type = $cleaning_type;
+            $order->cloth_service = $cloth_service;
+            $order->cloth_id = $cloth_id;
+            $order->cloth_count = $order->cloth_count + $clothCount;
+            $order->status = $payment['status'] == 'captured' ? 2 : 1;
+            $order->amount = $payment['amount'] / 100;
+            $order->paid_amount = $payment['amount'] / 100;
+            $order->payment_date = Carbon::now();
+            $order->start_date = Carbon::now();
+            $order->renew_date = Carbon::parse($order->renew_date)->startOfDay()->addMonths($months);
+            $order->payment_mode = $payment['method'];
+            $order->transaction_id = $acquirerData->upi_transaction_id ?? '';
+            $order->order_type = 'online';
+            $order->payment_id = $payment['id'];
+            $order->save();
+        });
 
-                    $order->payment_mode = $payment['method'];
-                    $order->transaction_id = $acquirerData->upi_transaction_id ?? '';
-                    $order->order_type = 'online';
-                    $order->payment_id = $payment['id'];
-                    $order->save();
-                    $user = User::find($order->user_id);
+        // Notifications sit outside the transaction: a WhatsApp failure must
+        // not roll back a paid renewal.
+        $package = Package::where('id', $order->package_id)->select('name')->first();
+        $clothService = $order->cloth_service == 1 ? 'Yes - ' . ($cloth->name ?? '') : 'No';
+        $mobile = optional($order->user)->mobile;
 
-                    $package = Package::where('id', $order->package_id)->select('name')->first();
-                    $clothService = $order->cloth_service == 1 ? "Yes - $cloth->name" : "No";
-                    if ($new_order) {
-                        SMSService::sendWhatsAppMsg($order->user->mobile, 'subscription_notification_customer2', [$package->name, $duration->duration, $order->car_number, $clothService, '****', '***']);
-                        SMSService::sendWhatsAppMsg('8650316068', 'subscription_notification_admin', [$order->car_number, $package->name, $duration->duration]);
-                    } else {
-                        SMSService::sendWhatsAppMsg($order->user->mobile, 'renew_notification_customer', [$package->name, $duration->duration, $order->car_number, $clothService]);
-                    }
-                }
-            } catch (\Exception $e) {
-                return  $e->getMessage();
-                \Session::put('error', $e->getMessage());
-                return redirect()->back();
-            }
+        if (! $mobile) {
+            return;
         }
-        $paymentData = [
-            'user_id' => $user->id ?? 0,
-            'order_id' => $order->id ?? 0,
-            'payment_amount' => $payment['amount'] / 100,
-            'currency' => 'INR',
-            'payment_status' => $payment['status'] ?? 'Pending',
-            'payment_method' => $payment['method'] ?? '',
-            'payment_date_time' => now(),
-            'transaction_id' => $acquirerData->upi_transaction_id ?? '',
-            'payment_gateway' => 'Razorpay',
-            'payment_for' => 'Subscription',
-        ];
-        DB::table('payment_history')->insert($paymentData);
 
-        \Session::put('success', 'Payment successful, your order has been placed successfully.');
-        return redirect()->route('backend.orders.show', ['order' => $order]);
+        if ($new_order) {
+            SMSService::sendWhatsAppMsg($mobile, 'subscription_notification_customer2', [$package->name ?? '', $months, $order->car_number, $clothService, '****', '***']);
+            SMSService::sendWhatsAppMsg('8650316068', 'subscription_notification_admin', [$order->car_number, $package->name ?? '', $months]);
+        } else {
+            SMSService::sendWhatsAppMsg($mobile, 'renew_notification_customer', [$package->name ?? '', $months, $order->car_number, $clothService]);
+        }
     }
     public function store(Request $request)
     {
@@ -535,6 +602,8 @@ class OrdersController extends BackendBaseController
         $module_name_singular = Str::singular($module_name);
 
         $module_action = 'Store';
+
+        $this->guardCustomerSector($request->user_id);
 
         $order = new \Modules\Order\Models\Order();
         $response = $order->getPrice($request);
@@ -554,7 +623,9 @@ class OrdersController extends BackendBaseController
     public function renewNotification(Request $request)
     {
         $ids = $request->input('ids');
-        $orders = Order::whereIn('id', $ids)->get();
+        $orders = Order::whereIn('id', $ids)
+            ->forSectors(SectorService::allowedSectorIds())
+            ->get();
         foreach ($orders as $key => $order) {
             if (!empty($request->cloth_notification)) {
                 if ($order->cloth_service == 1 && $order->cloth_count <= 5) {
@@ -574,6 +645,83 @@ class OrdersController extends BackendBaseController
         }
         return response()->json(['message' => 'Notofication send successfully.']);
     }
+    /**
+     * Reassign many cars to one cleaner in a single action.
+     *
+     * Both ends are checked: the orders are narrowed to the sectors the user
+     * may touch, and the cleaner has to be someone they are allowed to pick.
+     * Anything outside that is reported back rather than silently skipped.
+     *
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function bulkAssignCleaner(Request $request)
+    {
+        $this->authorize('edit_orders');
+
+        $request->validate([
+            'ids' => 'required|array',
+            'ids.*' => 'integer',
+            'assigned_user_id' => 'required|integer',
+        ]);
+
+        $sectorIds = SectorService::allowedSectorIds();
+
+        $cleaner = SectorService::scopeByUserSector(
+            User::whereHas('roles', function ($query) {
+                $query->where('name', SectorService::CLEANER_ROLE);
+            })->where('id', $request->assigned_user_id),
+            $sectorIds,
+            'users.id'
+        )->first();
+
+        if (! $cleaner) {
+            return response()->json([
+                'message' => 'That cleaner is not one you can assign.',
+            ], 422);
+        }
+
+        $orders = Order::with('user')
+            ->whereIn('id', $request->ids)
+            ->forSectors($sectorIds)
+            ->get();
+
+        $skipped = count($request->ids) - $orders->count();
+        $assigned = 0;
+
+        foreach ($orders as $order) {
+            if ((int) $order->assigned_user_id === (int) $cleaner->id) {
+                continue;
+            }
+
+            $order->assigned_user_id = $cleaner->id;
+            $order->save();
+            $assigned++;
+
+            // Same notification the single order screen sends.
+            if ($mobile = optional($order->user)->mobile) {
+                SMSService::sendWhatsAppMsg($mobile, 'cleaner_assigned_customer', [
+                    $order->car_number,
+                    $cleaner->name,
+                    $cleaner->mobile,
+                ]);
+            }
+        }
+
+        Log::info('Bulk cleaner assignment.', [
+            'cleaner_id' => $cleaner->id,
+            'assigned' => $assigned,
+            'skipped' => $skipped,
+        ]);
+
+        $message = $assigned.' order(s) assigned to '.$cleaner->name.'.';
+
+        if ($skipped > 0) {
+            $message .= ' '.$skipped.' were skipped because they are outside your sectors.';
+        }
+
+        return response()->json(['message' => $message, 'assigned' => $assigned]);
+    }
+
     public function index_data()
     {
         $module_title = $this->module_title;
@@ -588,8 +736,22 @@ class OrdersController extends BackendBaseController
         $page_heading = label_case($module_title);
         $title = $page_heading . ' ' . label_case($module_action);
 
+        // Every display column is joined in. Resolving them per row instead
+        // cost four extra queries for each of the 50 rows on a page.
         $$module_name = Order::join('users', 'orders.user_id', '=', 'users.id')
-            ->select('orders.*', 'users.mobile');
+            ->leftJoin('sectors', 'orders.sector_id', '=', 'sectors.id')
+            ->leftJoin('users as assigned_users', 'orders.assigned_user_id', '=', 'assigned_users.id')
+            ->leftJoin('packages', 'orders.package_id', '=', 'packages.id')
+            ->leftJoin('cars', 'orders.car_id', '=', 'cars.id')
+            ->select(
+                'orders.*',
+                'users.mobile',
+                'users.name as user_name',
+                'sectors.name as sector_name',
+                'assigned_users.name as assigned_user',
+                'packages.name as package_name',
+                'cars.name as car_name'
+            );
 
         $user = auth()->user();
         $roles = !empty($user) ? $user->roles()->pluck('name')[0] : '';
@@ -604,6 +766,13 @@ class OrdersController extends BackendBaseController
                     ->orWhere('orders.status', 4);
             });
         }
+
+        // Sector restriction. The requested sector is validated against the
+        // user's own sectors, so this cannot be widened from the browser.
+        $$module_name = $$module_name->forSectors(
+            SectorService::selectedSectorIds(request()->get('filter_sector_id'))
+        );
+
         $$module_name = $$module_name->whereNotNull('renew_date');
         $request = request()->all();
         if (!empty($request['filter_status']) && $request['filter_status'] != '*') {
@@ -661,19 +830,19 @@ class OrdersController extends BackendBaseController
                 return Carbon::parse($data->renew_date)->format('d-m-Y');
             })
             ->editColumn('user_name', function ($data) {
-                return User::find($data->user_id)->name ?? '';
+                return $data->user_name ?? '';
             })
-            // ->editColumn('mobile', function ($data) {
-            //     return User::find($data->user_id)->mobile ?? '';
-            // })
             ->editColumn('assigned_user', function ($data) {
-                return User::find($data->assigned_user_id)->name ?? 'Not Assigned';
+                return $data->assigned_user ?? 'Not Assigned';
             })
             ->editColumn('package_name', function ($data) {
-                return Package::find($data->package_id)->name ?? '';
+                return $data->package_name ?? '';
+            })
+            ->editColumn('sector_name', function ($data) {
+                return $data->sector_name ?? 'NA';
             })
             ->editColumn('car_name', function ($data) {
-                return Car::find($data->car_id)->name ?? '';
+                return $data->car_name ?? '';
             })
             ->editColumn('status', function ($data) {
                 $select_options = [
@@ -734,6 +903,7 @@ class OrdersController extends BackendBaseController
                 ->leftjoin('cloths as c', 'orders.cloth_id', '=', 'c.id')
                 ->select('orders.*', 'packages.name as package_name', 'cars.name as car_name', 'users.name as assigned_user', 'users2.name as user_name', 'users2.mobile as user_mobile', 'users.mobile as cleaner_mobile', 'internaltypes.name as internaltype_name', 'durations.name as duration_name', 'c.name as cloth_name')
                 ->where('orders.id', $id)
+                ->forSectors(SectorService::allowedSectorIds())
                 ->firstOrFail();
         }
         //  echo"<pre>";print_r($$module_name_singular);die;
@@ -750,5 +920,48 @@ class OrdersController extends BackendBaseController
             "$module_path.$module_name.show",
             compact('module_title', 'module_name', 'module_path', 'module_icon', 'module_name_singular', 'module_action', "$module_name_singular")
         );
+    }
+
+    /**
+     * A Franchise Owner may open, edit and delete orders, but only the ones in
+     * their own sectors. The shared CRUD in BackendBaseController does the work
+     * once the sector has been checked.
+     *
+     * @param  int  $id
+     * @return Response
+     */
+    public function edit($id)
+    {
+        $this->guardSectorAccess($id);
+
+        return parent::edit($id);
+    }
+
+    /**
+     * @param  int  $id
+     * @return Response
+     */
+    public function update(Request $request, $id)
+    {
+        $this->guardSectorAccess($id);
+
+        // Moving an order onto a customer in another sector would move the
+        // order out of the franchise's reach, so it is blocked.
+        if (! empty($request->user_id)) {
+            $this->guardCustomerSector($request->user_id);
+        }
+
+        return parent::update($request, $id);
+    }
+
+    /**
+     * @param  int  $id
+     * @return Response
+     */
+    public function destroy($id)
+    {
+        $this->guardSectorAccess($id);
+
+        return parent::destroy($id);
     }
 }

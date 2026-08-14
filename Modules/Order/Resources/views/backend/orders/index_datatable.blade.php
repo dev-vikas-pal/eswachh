@@ -10,6 +10,9 @@
 @php
 $user = auth()->user();
 $roles = !empty($user)?$user->roles()->pluck('name')[0]:'';
+$isFranchiseOwner = !empty($user) && \App\Services\SectorService::isFranchiseOwner($user);
+$canSeeAllSectors = !$isFranchiseOwner;
+$sectorOptions = \App\Services\SectorService::sectorOptions($user);
 @endphp
 @section('content')
 <div class="card">
@@ -45,8 +48,24 @@ $roles = !empty($user)?$user->roles()->pluck('name')[0]:'';
                 @endcan
             </x-slot>
         </x-backend.section-header>
-        @if($roles=='super admin' || $roles=='supervisor')
-        <div class="row mb-3 filterclass">
+        @if($roles=='super admin' || $roles=='supervisor' || $isFranchiseOwner)
+        <div class="orders-toolbar mb-3">
+        <div class="toolbar-heading"><i class="fas fa-filter"></i> @lang('Filters')</div>
+        <div class="row g-2 filterclass">
+            <div class="col-sm-2">
+                <?php
+                $field_name = 'sector_id';
+                $field_lable = __("Sector");
+                $required = "";
+                $select_options = $sectorOptions;
+                if ($canSeeAllSectors || count($sectorOptions) > 1) {
+                    $select_options = ['*' => ($canSeeAllSectors ? __('All Sectors') : __('All My Sectors'))] + $select_options;
+                }
+                $field_value = request()->get('filter_sector_id', '*');
+                ?>
+                {{ html()->label($field_lable, $field_name)->class('form-label') }} {!! fielf_required($required) !!}
+                {{ html()->select($field_name, $select_options, $field_value)->class('form-control select2')->attributes(["$required"]) }}
+            </div>
             <div class="col-sm-2">
                 <?php
                 $field_name = 'status';
@@ -97,7 +116,7 @@ $roles = !empty($user)?$user->roles()->pluck('name')[0]:'';
                 {{ html()->label($field_lable, $field_name)->class('form-label') }} {!! fielf_required($required) !!}
                 {{ html()->date($field_name)->placeholder($field_placeholder)->class('form-control')->attributes(["$required"]) }}
             </div> -->
-            <div class="col-sm-4">
+            <div class="col-sm-3">
                 <?php
                 $clothexpired = request()->has('clothexpired') ? true : false;
                 $field_name = 'renew_date';
@@ -117,30 +136,55 @@ $roles = !empty($user)?$user->roles()->pluck('name')[0]:'';
                     {{ html()->date($field_name.'_end')->placeholder('End '.$field_placeholder)->class('form-control')->attributes(["$required"])->value($field_value_end) }}
                 </div>
             </div>
-            <div class="col-sm-2">
-                <label></label>
-                <a href="{{route('backend.orders.index')}}" class="btn btn-primary" style="margin-top:32px;">Clear Filter</a>
+            <div class="col-sm-1 d-grid align-self-end">
+                <a href="{{route('backend.orders.index')}}" class="btn btn-outline-secondary mb-1" title="{{ __('Clear all filters') }}">
+                    <i class="fas fa-times"></i>
+                </a>
             </div>
         </div>
+        </div>
         @endif
-        @if($roles=='super admin')
-        <div class="row">
-            <div class="col-sm-3">
-                <label></label>
-                <button class="btn btn-primary" id="send-renew-notification" style="margin-top:25px;"> Send Renew Notification</button>
+        @if($roles=='super admin' || $isFranchiseOwner)
+        <div class="orders-toolbar mb-3">
+            <div class="toolbar-heading">
+                <i class="fas fa-check-square"></i> @lang('Actions for selected cars')
+                <span class="text-muted fw-normal">&mdash; @lang('tick the rows below first')</span>
             </div>
-            <div class="col-sm-3">
-                <label></label>
-                <button class="btn btn-primary" id="send-hold-notification" style="margin-top:25px;"> Send Hold Notification</button>
-            </div>
-            <div class="col-sm-3">
-                <label></label>
-                <button class="btn btn-primary" id="send-cloth-notification" style="margin-top:25px;"> Send Cloth Renew Notification</button>
-            </div>
-            <div class="col-sm-3">
-                <label></label>
-                <input type="text" name="dynamic_template_name" id="dynamic_template_name" placeholder="Template Name" class="form-control dynamic_template_name">
-                <button class="btn btn-primary" id="send-dynamic-notification" style="margin-top:25px;"> Send Dynamic SMS</button>
+
+            <div class="row g-2 align-items-end">
+                <div class="col-sm-4">
+                    <label class="form-label" for="bulk_assigned_user_id">@lang('Reassign to cleaner')</label>
+                    <div class="input-group">
+                        {{ html()->select('bulk_assigned_user_id', [])->placeholder(__('Select a cleaner'))->class('form-control select2-bulk-cleaner') }}
+                        <button class="btn btn-primary" id="bulk-assign-cleaner" type="button">
+                            <i class="fas fa-user-check"></i> @lang('Assign')
+                        </button>
+                    </div>
+                </div>
+
+                @if($roles=='super admin')
+                <div class="col-sm-8">
+                    <label class="form-label">@lang('Send WhatsApp notification')</label>
+                    <div class="d-flex flex-wrap gap-2">
+                        <button class="btn btn-outline-primary" id="send-renew-notification" type="button">
+                            <i class="fas fa-rotate"></i> @lang('Renewal')
+                        </button>
+                        <button class="btn btn-outline-primary" id="send-hold-notification" type="button">
+                            <i class="fas fa-pause"></i> @lang('Hold')
+                        </button>
+                        <button class="btn btn-outline-primary" id="send-cloth-notification" type="button">
+                            <i class="fas fa-shirt"></i> @lang('Cloth Renewal')
+                        </button>
+                        <div class="input-group" style="width: auto;">
+                            <input type="text" name="dynamic_template_name" id="dynamic_template_name"
+                                   placeholder="@lang('Template name')" class="form-control dynamic_template_name">
+                            <button class="btn btn-outline-primary" id="send-dynamic-notification" type="button">
+                                <i class="fas fa-paper-plane"></i> @lang('Send')
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                @endif
             </div>
         </div>
         @endif
@@ -166,6 +210,9 @@ $roles = !empty($user)?$user->roles()->pluck('name')[0]:'';
                             </th>
                             <th>
                                 @lang("order::text.mobile")
+                            </th>
+                            <th>
+                                @lang("Sector")
                             </th>
                             <th>
                                 @lang("order::text.paid_amount")
@@ -210,6 +257,42 @@ $roles = !empty($user)?$user->roles()->pluck('name')[0]:'';
 <!-- DataTables Core and Extensions -->
 <link rel="stylesheet" href="{{ asset('vendor/datatable/datatables.min.css') }}">
 
+<style>
+    /* Group the filters and the bulk actions into their own panels so the
+       screen reads as three blocks rather than one wall of controls. */
+    .orders-toolbar {
+        background: rgba(0, 0, 21, .015);
+        border: 1px solid rgba(0, 0, 21, .1);
+        border-radius: .375rem;
+        padding: .75rem 1rem 1rem;
+    }
+
+    .orders-toolbar .toolbar-heading {
+        font-size: .75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: #768192;
+        margin-bottom: .75rem;
+    }
+
+    .orders-toolbar .form-label {
+        font-size: .8125rem;
+        margin-bottom: .25rem;
+    }
+
+    /* select2 sits inside an input-group next to the Assign button. */
+    .orders-toolbar .input-group .select2-container {
+        flex: 1 1 auto;
+        width: 1% !important;
+    }
+
+    .orders-toolbar .input-group .select2-container .select2-selection {
+        height: 100%;
+        border-top-right-radius: 0;
+        border-bottom-right-radius: 0;
+    }
+</style>
 @endpush
 <x-library.select2 />
 @push ('after-scripts')
@@ -221,6 +304,71 @@ $roles = !empty($user)?$user->roles()->pluck('name')[0]:'';
         $('input[type="checkbox"]').prop('checked', this.checked);
     });
     $(document).ready(function() {
+        // Cleaner picker for the bulk reassign. The endpoint already limits
+        // the list to cleaners in the sectors this user may see.
+        $('.select2-bulk-cleaner').select2({
+            theme: "bootstrap4",
+            placeholder: '@lang("Select a cleaner")',
+            minimumInputLength: 0,
+            allowClear: true,
+            ajax: {
+                url: '{{ route("backend.users.index_list", ["user_type" => "cleaner"]) }}',
+                dataType: 'json',
+                data: function(params) {
+                    return { q: $.trim(params.term) };
+                },
+                processResults: function(data) {
+                    return { results: data };
+                },
+                cache: true
+            }
+        });
+
+        $('#bulk-assign-cleaner').on('click', function() {
+            const selectedIds = [];
+            table.$('input[type="checkbox"]:checked').each(function() {
+                selectedIds.push($(this).data('id'));
+            });
+
+            const cleanerId = $('#bulk_assigned_user_id').val();
+
+            if (selectedIds.length === 0) {
+                alert('No rows selected.');
+                return;
+            }
+
+            if (!cleanerId) {
+                alert('Please choose a cleaner first.');
+                return;
+            }
+
+            if (!confirm('Reassign ' + selectedIds.length + ' car(s) to the selected cleaner?')) {
+                return;
+            }
+
+            const $button = $(this).prop('disabled', true);
+
+            $.ajax({
+                url: '{{ route("backend.orders.bulkAssignCleaner") }}',
+                method: 'POST',
+                data: {
+                    ids: selectedIds,
+                    assigned_user_id: cleanerId,
+                    _token: '{{ csrf_token() }}'
+                },
+                success: function(response) {
+                    alert(response.message);
+                    table.draw(false);
+                },
+                error: function(xhr) {
+                    alert((xhr.responseJSON && xhr.responseJSON.message) || 'The cars could not be reassigned.');
+                },
+                complete: function() {
+                    $button.prop('disabled', false);
+                }
+            });
+        });
+
         $('#send-renew-notification').on('click', function() {
             const selectedIds = [];
             table.$('input[type="checkbox"]:checked').each(function() {
@@ -384,12 +532,15 @@ $roles = !empty($user)?$user->roles()->pluck('name')[0]:'';
         var table = $('#datatable').DataTable({
             processing: true,
             serverSide: true,
-            autoWidth: true,
+            // Fixed layout spreads the 12 columns evenly instead of letting a
+            // long customer name squeeze the rest.
+            autoWidth: false,
             responsive: true,
             pageLength: 50,
             ajax: {
                 url: '{{ route("backend.$module_name.index_data") }}',
                 data: function(d) {
+                    d.filter_sector_id = $('#sector_id option:selected').val();
                     d.filter_status = $('#status option:selected').val();
                     d.filter_package_id = $('#package_id option:selected').val();
                     d.filter_assigned_user_id = $('#assigned_user_id option:selected').val();
@@ -437,6 +588,10 @@ $roles = !empty($user)?$user->roles()->pluck('name')[0]:'';
                 //    searchable: false
                 },
                 {
+                    data: 'sector_name',
+                    name: 'sectors.name'
+                },
+                {
                     data: 'paid_amount',
                     name: 'paid_amount'
                 },
@@ -460,8 +615,14 @@ $roles = !empty($user)?$user->roles()->pluck('name')[0]:'';
                     searchable: false
                 }
             ],
+            // Column order: 0 checkbox, 1 #, 2 car name, 3 car number, 4 user,
+            // 5 mobile, 6 sector, 7 paid, 8 status, 9 cleaner, 10 renew, 11 action
             columnDefs: [
-                { targets: 0, orderable: false } // Ensure checkbox column is non-sortable
+                { targets: 0, orderable: false, width: '2%' },
+                { targets: 1, width: '5%' },
+                { targets: [6, 7], width: '8%' },
+                { targets: 10, className: 'text-nowrap' },
+                { targets: -1, orderable: false, width: '8%' }
             ],
             order: [[1, 'desc']]
         });

@@ -3,6 +3,7 @@
 namespace Modules\Order\Http\Controllers\Frontend;
 
 use App\Http\Controllers\Controller;
+use App\Services\SectorService;
 use Illuminate\Http\Response;
 use Illuminate\Support\Str;
 use Illuminate\Http\Request;
@@ -28,7 +29,7 @@ use App\Models\OTP;
 use Illuminate\Http\JsonResponse;
 use Modules\Order\Models\Order;
 use Modules\Cloth\Models\Cloth;
-use Razorpay\Api\Api;
+use App\Services\RazorpayService;
 use Illuminate\Support\Facades\Auth;
 
 class OrdersController extends Controller
@@ -148,22 +149,12 @@ class OrdersController extends Controller
             return response()->json(['errors' => $validator->errors()], 400);
         }
 
-        switch ($request->parent_type) {
-            case ('cities'):
-                $list = DB::table('cities')->where('state_id', $request->parent_id)->where('status', 1)->get();
-                break;
-            case ('areas'):
-                $list = DB::table('areas')->where('city_id', $request->parent_id)->where('status', 1)->get();
-                break;
-            case ('sectors'):
-                $list = DB::table('sectors')->where('area_id', $request->parent_id)->whereNull('deleted_at')->where('status', 1)->get();
-                break;
-            case ('societys'):
-                $list = DB::table('societies')->where('sector_id', $request->parent_id)->whereNull('deleted_at')->where('status', 1)->get();
-                break;
-            default:
-                $list = [];
-        }
+        // This route is served by the api middleware group, which carries no
+        // session, so there is never a logged in user here and the list comes
+        // back unrestricted. That is correct for the public signup form. The
+        // backend uses backend.users.locationOptions instead, which does have a
+        // session and therefore applies the Franchise Owner's sector limits.
+        $list = SectorService::locationOptions($request->parent_type, $request->parent_id);
 
         $html = '<option></option>';
         foreach ($list as $value) {
@@ -261,7 +252,7 @@ class OrdersController extends Controller
 
         $user = $this->addUser($userData, $request);
 
-        $api = new Api(env('RAZOR_KEY'), env('RAZOR_SECRET'));
+        $api = RazorpayService::api();
 
         $order = $api->order->create([
             'amount' => $final_price * 100,
@@ -278,7 +269,9 @@ class OrdersController extends Controller
             'car_id' => $request->car_id,
             'package_id' => $request->package_id,
             'cleaning_type' => $request->cleaning_type,
-            'cloth_id' => $request->cloth_id ?? 0,
+            // A select with nothing chosen posts the literal "null", which the
+            // null coalescing operator does not catch; cloth_id is an integer.
+            'cloth_id' => is_numeric($request->cloth_id) ? (int) $request->cloth_id : 0,
             'cloth_count' => $cloth->count ?? 0,
             'cloth_service' => $request->cloth_service ?? 0,
             'pakage_type' => $request->pakage_type,
@@ -292,9 +285,18 @@ class OrdersController extends Controller
             'paid_amount' => $pdata['final_price'],
             'razorpay_order_id' => $order->id,
         );
-        $this->addOrder($orderData);
-        Log::info("sending request to Razorpay for new subscription");
-        Log::info("Request => " . print_r($orderData, true));
+        $localOrder = $this->addOrder($orderData);
+        // Only identifiers: $orderData carries the customer's temporary
+        // password, which must never reach the log file.
+        Log::info('Razorpay order created for new subscription.', [
+            'razorpay_order_id' => $order->id,
+            'car_number' => $orderData['car_number'],
+        ]);
+
+        // Note the payment now, so a signup that is abandoned at the payment
+        // screen still leaves a record to chase.
+        RazorpayService::recordInitiated($order->id, $localOrder, $user->id, 'Subscription', (float) $pdata['final_price']);
+
         return response()->json(['success' => true, 'razorpay_order_id' => $order->id]);
     }
     public function addOrder($data)

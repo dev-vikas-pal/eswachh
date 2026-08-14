@@ -18,6 +18,21 @@
         display: none;
         z-index: 9999;
     }
+    .payment-warning {
+        position: absolute;
+        top: calc(50% + 45px);
+        left: 50%;
+        transform: translateX(-50%);
+        width: 90%;
+        max-width: 420px;
+        text-align: center;
+        color: #fff;
+        font-size: 16px;
+        font-weight: 600;
+        line-height: 1.5;
+        text-shadow: 0 1px 2px rgba(0,0,0,.6);
+    }
+
 
     .loader {
         position: absolute;
@@ -48,6 +63,7 @@
 </style>
 <div id="page-loader">
     <div class="loader"></div>
+    <div class="payment-warning">Please do not close or refresh this window while your payment is being processed.</div>
 </div>
 <div class="card">
     <div class="card-body">
@@ -97,7 +113,7 @@
                     var razorpayOrderID = data.razorpay_order_id;
                     var csrfToken = "{{ csrf_token() }}";
                     var options = {
-                        key: "{{ env('RAZOR_KEY') }}",
+                        key: "{{ config('services.razorpay.key') }}",
                         amount: 100,
                         currency: 'INR',
                         name: 'Eswachh Integrated Solutions Private Limited',

@@ -4,6 +4,7 @@ namespace Modules\Reminder\Http\Controllers\Backend;
 
 use App\Authorizable;
 use App\Http\Controllers\Backend\BackendBaseController;
+use App\Services\SectorService;
 use Yajra\DataTables\DataTables;
 use App\Models\User;
 use Carbon\Carbon;
@@ -33,7 +34,14 @@ class RemindersController extends BackendBaseController
     {
         $module_name = $this->module_name;
         $module_model = $this->module_model;
-        $$module_name = $module_model::select();
+
+        // A reminder belongs to the sector of the person it is assigned to.
+        $$module_name = SectorService::scopeByUserSector(
+            $module_model::select(),
+            SectorService::allowedSectorIds(),
+            'reminders.assigned_user_id'
+        );
+
         return Datatables::of($$module_name)
             ->addColumn('action', function ($data) {
                 $module_name = $this->module_name;
@@ -55,4 +63,26 @@ class RemindersController extends BackendBaseController
             ->make(true);
     }
 
+    /**
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function show($id)
+    {
+        $sectorIds = SectorService::allowedSectorIds();
+
+        if ($sectorIds !== null) {
+            $accessible = SectorService::scopeByUserSector(
+                $this->module_model::where('id', $id),
+                $sectorIds,
+                'reminders.assigned_user_id'
+            )->exists();
+
+            if (! $accessible) {
+                abort(404);
+            }
+        }
+
+        return parent::show($id);
+    }
 }

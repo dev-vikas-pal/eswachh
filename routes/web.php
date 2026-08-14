@@ -136,12 +136,55 @@ Route::group(['namespace' => 'App\Http\Controllers\Backend', 'prefix' => 'admin'
 
     /*
     *
+    *  Complaints Routes
+    *
+    * ---------------------------------------------------------------------
+    */
+    $module_name = 'complaints';
+    $controller_name = 'ComplaintsController';
+    Route::get("$module_name", ['as' => "$module_name.index", 'uses' => "$controller_name@index"]);
+    Route::get("$module_name/index_data", ['as' => "$module_name.index_data", 'uses' => "$controller_name@index_data"]);
+    Route::get("$module_name/create", ['as' => "$module_name.create", 'uses' => "$controller_name@create"]);
+    Route::post("$module_name", ['as' => "$module_name.store", 'uses' => "$controller_name@store"]);
+    Route::patch("$module_name/{id}/resolve", ['as' => "$module_name.resolve", 'uses' => "$controller_name@resolve"]);
+    Route::get("$module_name/{id}", ['as' => "$module_name.show", 'uses' => "$controller_name@show"]);
+
+    /*
+    *
+    *  Attendance Routes
+    *
+    * ---------------------------------------------------------------------
+    */
+    $module_name = 'attendances';
+    $controller_name = 'AttendancesController';
+    Route::get("$module_name", ['as' => "$module_name.index", 'uses' => "$controller_name@index"]);
+    Route::get("$module_name/index_data", ['as' => "$module_name.index_data", 'uses' => "$controller_name@index_data"]);
+    Route::post("$module_name", ['as' => "$module_name.store", 'uses' => "$controller_name@store"]);
+
+    /*
+    *
+    *  Payments Routes
+    *
+    * ---------------------------------------------------------------------
+    */
+    $module_name = 'payments';
+    $controller_name = 'PaymentsController';
+    Route::get("$module_name", ['as' => "$module_name.index", 'uses' => "$controller_name@index"]);
+    Route::get("$module_name/index_data", ['as' => "$module_name.index_data", 'uses' => "$controller_name@index_data"]);
+    Route::get("$module_name/summary", ['as' => "$module_name.summary", 'uses' => "$controller_name@summary"]);
+    Route::get("$module_name/reports", ['as' => "$module_name.reports", 'uses' => "$controller_name@reports"]);
+    Route::patch("$module_name/{id}/status", ['as' => "$module_name.updateStatus", 'uses' => "$controller_name@updateStatus"]);
+    Route::get("$module_name/{id}/invoice", ['as' => "$module_name.invoice", 'uses' => "$controller_name@invoice"]);
+
+    /*
+    *
     *  Users Routes
     *
     * ---------------------------------------------------------------------
     */
     $module_name = 'users';
     $controller_name = 'UserController';
+    Route::post("$module_name/locationOptions", ['as' => "$module_name.locationOptions", 'uses' => "$controller_name@locationOptions"]);
     Route::get("$module_name/profile/{id}", ['as' => "$module_name.profile", 'uses' => "$controller_name@profile"]);
     Route::get("$module_name/profile/{id}/edit", ['as' => "$module_name.profileEdit", 'uses' => "$controller_name@profileEdit"]);
     Route::patch("$module_name/profile/{id}/edit", ['as' => "$module_name.profileUpdate", 'uses' => "$controller_name@profileUpdate"]);

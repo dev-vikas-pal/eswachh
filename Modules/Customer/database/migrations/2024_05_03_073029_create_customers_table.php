@@ -13,6 +13,13 @@ return new class extends Migration
      */
     public function up()
     {
+        // The table already exists in environments where it was created before
+        // this migration was recorded as run, so creating it again would abort
+        // the whole migration run.
+        if (Schema::hasTable('customers')) {
+            return;
+        }
+
         Schema::create('customers', function (Blueprint $table) {
             $table->id();
 

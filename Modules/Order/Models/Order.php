@@ -32,6 +32,66 @@ class Order extends BaseModel
         return \Modules\Order\database\factories\OrderFactory::new();
     }
 
+    /**
+     * Stamp the sector on every order, no matter which of the four creation
+     * paths it came through (frontend checkout, admin create, renew, renew
+     * without login), so the sector can never be silently missing.
+     */
+    protected static function booted()
+    {
+        static::creating(function ($order) {
+            if (empty($order->sector_id)) {
+                $order->sector_id = self::resolveSectorIdForUser($order->user_id);
+            }
+        });
+
+        // The order follows the customer: if an order is moved to another
+        // customer, it belongs to that customer's sector from then on.
+        static::updating(function ($order) {
+            if ($order->isDirty('user_id') && ! $order->isDirty('sector_id')) {
+                $order->sector_id = self::resolveSectorIdForUser($order->user_id);
+            }
+        });
+    }
+
+    /**
+     * The sector an order is serviced in, taken from the customer's profile.
+     *
+     * @param  int|null  $user_id
+     * @return int|null
+     */
+    public static function resolveSectorIdForUser($user_id)
+    {
+        if (empty($user_id)) {
+            return null;
+        }
+
+        $sector_id = DB::table('userprofiles')->where('user_id', $user_id)->value('sector_id');
+
+        return $sector_id > 0 ? $sector_id : null;
+    }
+
+    /**
+     * Restrict a query to the given sectors.
+     * A null value means "no restriction" (admin/superadmin); an empty array
+     * means the user has no sectors and must therefore see nothing.
+     *
+     * @param  array<int, int>|null  $sector_ids
+     */
+    public function scopeForSectors($query, ?array $sector_ids)
+    {
+        if ($sector_ids === null) {
+            return $query;
+        }
+
+        return $query->whereIn($query->qualifyColumn('sector_id'), $sector_ids);
+    }
+
+    public function sector()
+    {
+        return $this->belongsTo('Modules\Sector\Models\Sector', 'sector_id');
+    }
+
     public function package()
     {
         return $this->belongsTo('Modules\Package\Models\Package');

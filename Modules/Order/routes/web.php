@@ -62,6 +62,7 @@ Route::group(['namespace' => '\Modules\Order\Http\Controllers\Backend', 'as' => 
     Route::get("$module_name/index_list", ['as' => "$module_name.index_list", 'uses' => "$controller_name@index_list"]);
     Route::get("$module_name/index_data", ['as' => "$module_name.index_data", 'uses' => "$controller_name@index_data"]);
     Route::post("$module_name/renewNotification", ['as' => "$module_name.send.renew.notification", 'uses' => "$controller_name@renewNotification"]);
+    Route::post("$module_name/bulkAssignCleaner", ['as' => "$module_name.bulkAssignCleaner", 'uses' => "$controller_name@bulkAssignCleaner"]);
     Route::get("$module_name/trashed", ['as' => "$module_name.trashed", 'uses' => "$controller_name@trashed"]);
     Route::patch("$module_name/trashed/{id}", ['as' => "$module_name.restore", 'uses' => "$controller_name@restore"]);
     Route::get("$module_name/topUp/{id}", ['as' => "$module_name.topUp", 'uses' => "$controller_name@topUp"]);

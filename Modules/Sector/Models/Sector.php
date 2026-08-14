@@ -22,4 +22,28 @@ class Sector extends BaseModel
     {
         return \Modules\Sector\database\factories\SectorFactory::new();
     }
+
+    /**
+     * Franchise Owners assigned to this sector.
+     */
+    public function users()
+    {
+        return $this->belongsToMany('App\Models\User', 'sector_user', 'sector_id', 'user_id')->withTimestamps();
+    }
+
+    /**
+     * @return \Illuminate\Database\Eloquent\Relations\HasMany
+     */
+    public function societies()
+    {
+        return $this->hasMany('Modules\Society\Models\Society', 'sector_id');
+    }
+
+    /**
+     * @return \Illuminate\Database\Eloquent\Relations\HasMany
+     */
+    public function orders()
+    {
+        return $this->hasMany('Modules\Order\Models\Order', 'sector_id');
+    }
 }

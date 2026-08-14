@@ -7,6 +7,11 @@
 .env
 .env.backup
 .env.production
+
+# Credentials are never committed, wherever they are kept
+*credential*
+*credentials*
+docs/ewash_credentials.txt
 .phpunit.result.cache
 Homestead.json
 Homestead.yaml

@@ -11,11 +11,14 @@ use Modules\Order\Models\Order;
 /**
  * Daily job: chase the subscriptions that need attention.
  *
- * Four groups, each with its own message:
- *   - due to renew within the next week
+ * Three groups, each with its own message:
  *   - already past their renewal date
  *   - sitting on hold
  *   - running low on cloths
+ *
+ * The first two go out every day and keep going until the customer renews or
+ * the order is taken out of that state by hand. Nothing is sent before a plan
+ * has run out - see the note in handle() for the group that used to be here.
  *
  * Queries go through the Order model so soft deleted orders are excluded; the
  * previous version joined the tables directly and messaged deleted orders too.
@@ -43,13 +46,21 @@ class SendRenewalNotifications extends Command
 
         $today = Carbon::today();
 
-        $dueSoon = Order::with('user')
-            ->where('status', self::STATUS_ACTIVE)
-            ->whereNotNull('renew_date')
-            ->whereDate('renew_date', '>=', $today)
-            ->whereDate('renew_date', '<=', $today->copy()->addDays(7))
-            ->get();
-
+        /*
+         * Nothing is sent before a plan has actually run out.
+         *
+         * There used to be a fourth group here - everyone renewing within the
+         * next seven days - and it was messaged with the `subscription_expire`
+         * template, whose approved wording is "your car subscription expired
+         * and is due on ...". So twelve customers a day, whose plans were
+         * perfectly current, were told theirs had expired. Every day, until it
+         * actually did.
+         *
+         * There is no approved template that says a renewal is *coming up*
+         * (`toallren` is the closest, and it is a general broadcast with no
+         * date on it), so the group had nothing correct to send even in
+         * principle. The chase starts on the day the plan runs out.
+         */
         $expired = Order::with('user')
             ->where('status', self::STATUS_ACTIVE)
             ->whereNotNull('renew_date')
@@ -68,10 +79,18 @@ class SendRenewalNotifications extends Command
             ->get();
 
         $sent = 0;
-        $sent += $this->notify($dueSoon, 'due to renew soon', fn ($order) => [
-            'subscription_expire', [Carbon::parse($order->renew_date)->format('Y-m-d')],
-        ]);
 
+        /*
+         * Both of these go out every day this job runs, which is every day,
+         * and keep going until the customer renews or somebody changes the
+         * status. That is the business rule and it is deliberately not a
+         * setting here - v1 is being replaced, and a configuration screen for
+         * it would be thrown away with the rest. The equivalent numbers in v2
+         * are on its Settings screen.
+         *
+         * There is no dedupe: the same customer is messaged again tomorrow,
+         * and the day after. Marking the order inactive is what stops it.
+         */
         $sent += $this->notify($expired, 'past their renewal date', fn ($order) => [
             'subscription_expire', [Carbon::parse($order->renew_date)->format('Y-m-d')],
         ]);

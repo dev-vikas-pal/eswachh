@@ -284,8 +284,7 @@ class OrdersController extends BackendBaseController
             $new_order = false;
         }
 
-        // Keep the local order in its own variable. The name below is "order",
-        // so $$module_name_singular is $order, and the gateway call overwrites it.
+        // $$module_name_singular is $order, and the gateway call below overwrites it.
         $localOrder = $$module_name_singular;
 
         $api = RazorpayService::api();
@@ -310,9 +309,9 @@ class OrdersController extends BackendBaseController
                 'cloth_id' => $this->clothId($request->cloth_id),
             ],
         ]);
-        Log::info('Razorpay order created for renewal.', ['razorpay_order_id' => $order->id, 'order_id' => $localOrder->id]);
+        Log::info('Razorpay order created for renewal.', ['razorpay_order_id' => $order->id]);
 
-        RazorpayService::recordInitiated($order->id, $localOrder, $user->id, 'Subscription', (float) $final_price);
+        RazorpayService::recordInitiated($order->id, $localOrder, $user->id, 'Subscription', $final_price);
 
         return response()->json(['success' => true, 'razorpay_order_id' => $order->id]);
     }
@@ -386,7 +385,7 @@ class OrdersController extends BackendBaseController
             $new_order = false;
         }
 
-        // Same variable-name trap as renew(): $$module_name_singular is $order.
+        // $$module_name_singular is $order, and the gateway call below overwrites it.
         $localOrder = $$module_name_singular;
 
         $api = RazorpayService::api();
@@ -411,9 +410,9 @@ class OrdersController extends BackendBaseController
                 'cloth_id' => $this->clothId($request->cloth_id),
             ],
         ]);
-        Log::info('Razorpay order created for renewal.', ['razorpay_order_id' => $order->id, 'order_id' => $localOrder->id]);
+        Log::info('Razorpay order created for renewal.', ['razorpay_order_id' => $order->id]);
 
-        RazorpayService::recordInitiated($order->id, $localOrder, $user->id, 'Subscription', (float) $final_price);
+        RazorpayService::recordInitiated($order->id, $localOrder, $user->id, 'Subscription', $final_price);
 
         return response()->json(['success' => true, 'name' => $user->name, 'mobile' => $user->mobile, 'email' => $user->email, 'razorpay_order_id' => $order->id]);
     }

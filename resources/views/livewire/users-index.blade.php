@@ -1,21 +1,7 @@
 <div>
     <div class="row mt-4">
         <div class="col">
-            <div class="row g-2 my-2">
-                <div class="col-md-4">
-                    <label class="form-label" for="franchise_id">@lang('Franchise')</label>
-                    <select id="franchise_id" class="form-control" wire:model="franchiseId">
-                        <option value="">{{ $franchiseAllLabel }}</option>
-                        @foreach ($franchises as $id => $name)
-                        <option value="{{ $id }}">{{ $name }}</option>
-                        @endforeach
-                    </select>
-                </div>
-                <div class="col-md-8">
-                    <label class="form-label" for="user_search">@lang('Search')</label>
-                    <input id="user_search" type="text" class="form-control" placeholder="@lang('Search')" wire:model="searchTerm" />
-                </div>
-            </div>
+            <input type="text" class="form-control my-2" placeholder=" Search" wire:model="searchTerm" />
 
             <div class="table-responsive">
                 <table class="table table-hover table-responsive-sm" wire:loading.class="table-secondary">

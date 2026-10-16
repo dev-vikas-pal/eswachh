@@ -55,6 +55,7 @@
                     '*' => 'ALL',
                     'customer' => 'Customer',
                     'cleaner' => 'Cleaner',
+                    'franchise owner' => 'Franchise',
                     'super admin' => 'Admin',
                 ];
                 ?>

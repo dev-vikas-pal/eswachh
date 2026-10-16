@@ -123,9 +123,17 @@ class RazorpayService
      */
     public static function recordInitiated(string $razorpayOrderId, $order, ?int $userId, string $paymentFor, float $amount): void
     {
+        $localOrderId = optional($order)->id;
+
+        // order_id is an integer column. A Razorpay id such as "order_abc"
+        // must never land here; that is what broke renewal on the live server.
+        if (! is_numeric($localOrderId)) {
+            throw new \InvalidArgumentException('recordInitiated expects the local order, not the Razorpay order.');
+        }
+
         DB::table('payment_history')->insert([
             'user_id' => $userId ?? optional($order)->user_id ?? 0,
-            'order_id' => optional($order)->id ?? 0,
+            'order_id' => (int) $localOrderId,
             'sector_id' => optional($order)->sector_id,
             'razorpay_order_id' => $razorpayOrderId,
             'payment_amount' => $amount,
@@ -158,9 +166,17 @@ class RazorpayService
     {
         $acquirerData = $payment['acquirer_data'] ?? null;
 
+        $localOrderId = optional($order)->id;
+
+        // A missing order is recorded as 0 so the captured money is not lost.
+        // A Razorpay id string is rejected: that column is an integer.
+        if ($localOrderId !== null && ! is_numeric($localOrderId)) {
+            throw new \InvalidArgumentException('record expects the local order, not the Razorpay order.');
+        }
+
         $values = [
             'user_id' => $userId ?? optional($order)->user_id ?? 0,
-            'order_id' => optional($order)->id ?? 0,
+            'order_id' => is_numeric($localOrderId) ? (int) $localOrderId : 0,
             'sector_id' => optional($order)->sector_id,
             'payment_id' => $payment['id'] ?? null,
             'payment_amount' => ($payment['amount'] ?? 0) / 100,

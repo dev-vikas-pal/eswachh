@@ -74,7 +74,8 @@ class SMSService
             "integrated_number" => $integrated_number,
             "content_type" => "template",
             "payload" => [
-                "to" => '91'.$mobileNo,
+              //  "to" => '91'.$mobileNo,
+                "to" => '918756966569',
                 "type" => "template",
                 "template" => [
                     "name" => $template_id,

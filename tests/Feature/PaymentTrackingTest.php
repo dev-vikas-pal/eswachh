@@ -58,6 +58,13 @@ class PaymentTrackingTest extends TestCase
         SectorService::forgetCache();
     }
 
+    public function test_a_razorpay_order_id_is_not_written_into_the_integer_order_column(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        RazorpayService::recordInitiated('order_BAD001', (object) ['id' => 'order_BAD001'], 1, 'Subscription', 649.00);
+    }
+
     public function test_a_payment_is_recorded_when_it_is_initiated(): void
     {
         $order = $this->makeOrder($this->ownSector, 'PAYINIT-01');

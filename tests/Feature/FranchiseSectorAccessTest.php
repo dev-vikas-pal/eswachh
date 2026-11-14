@@ -176,6 +176,50 @@ class FranchiseSectorAccessTest extends TestCase
         $this->assertEqualsWithDelta(1400, (float) $adminResponse->viewData('totalRevenue'), 0.01);
     }
 
+    public function test_super_admin_dashboard_follows_the_chosen_franchise(): void
+    {
+        $second = Sector::create(['name' => 'Test Sector C', 'status' => 1, 'area_id' => self::TEST_AREA_ID]);
+        $this->franchiseOwner->sectors()->sync([$this->ownSector->id, $second->id]);
+
+        $this->makeOrder($this->ownSector, 'FR-OWN');
+        $this->makeOrder($second, 'FR-SECOND');
+        $this->makeOrder($this->otherSector, 'FR-OTHER');
+
+        $response = $this->actingAs($this->admin)->get(route('backend.dashboard', [
+            'filter_franchise_id' => $this->franchiseOwner->id,
+        ]));
+
+        $response->assertOk();
+        $response->assertSee('Franchise');
+        $this->assertSame(2, $response->viewData('totalOrders'));
+    }
+
+    public function test_a_cleaner_sees_assigned_cars_on_the_dashboard_and_today_task(): void
+    {
+        $cleaner = $this->makeCleaner($this->ownSector, 'round.cleaner@test.local');
+        $cleaner->givePermissionTo(['view_backend', 'view_cleaners']);
+
+        $order = $this->makeOrder($this->ownSector, 'ROUND-01');
+        $order->update(['assigned_user_id' => $cleaner->id]);
+
+        $held = $this->makeOrder($this->ownSector, 'ROUND-HOLD');
+        $held->update(['assigned_user_id' => $cleaner->id, 'status' => 4]);
+
+        $someoneElse = $this->makeOrder($this->ownSector, 'ROUND-OTHER');
+
+        $dashboard = $this->actingAs($cleaner)->get(route('backend.dashboard'));
+        $dashboard->assertOk();
+        $dashboard->assertSee('ROUND-01');
+        $dashboard->assertSee('ROUND-HOLD');
+        $dashboard->assertDontSee('ROUND-OTHER');
+
+        $tasks = $this->actingAs($cleaner)->get(route('backend.cleaners.index'));
+        $tasks->assertOk();
+        $tasks->assertSee('ROUND-01');
+        $tasks->assertSee('ROUND-HOLD');
+        $tasks->assertDontSee('ROUND-OTHER');
+    }
+
     public function test_dashboard_offers_only_the_owned_sectors_in_the_filter(): void
     {
         $response = $this->actingAs($this->franchiseOwner)->get(route('backend.dashboard'));

@@ -4,9 +4,13 @@
     <div class="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900">
         <div class="bg-white dark:bg-gray-800 shadow-md rounded-xl p-8 max-w-md text-center border border-green-500">
             
-            @if(session('success'))
+            @if(session('success') === \App\Services\RazorpayService::VERIFIED_MESSAGE)
+                <div class="mb-6 text-green-700" style="font-size: 32px; font-weight: 800; line-height: 1.3;">
+                    {{ session('success') }}
+                </div>
+            @elseif(session('success'))
                 <div class="mb-6 text-green-700 dark:text-green-400 text-lg font-semibold">
-                    ✅ {{ session('success') }}
+                    {{ session('success') }}
                 </div>
             @else
                 <div class="mb-6 text-green-700 dark:text-green-400 text-lg font-semibold">

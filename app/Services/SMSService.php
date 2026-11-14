@@ -67,6 +67,16 @@ class SMSService
         $authkey = config('services.msg91.auth_token');
         $integrated_number = config('services.msg91.whatsapp_number');
 
+        $recipient = self::whatsAppRecipient($mobileNo);
+
+        if ($recipient === null) {
+            Log::warning('WhatsApp message skipped: no usable mobile number.', [
+                'template' => $template_id,
+            ]);
+
+            return false;
+        }
+
         $response = Http::withHeaders([
             'Content-Type' => 'application/json',
             'authkey' => $authkey,
@@ -74,8 +84,8 @@ class SMSService
             "integrated_number" => $integrated_number,
             "content_type" => "template",
             "payload" => [
-              //  "to" => '91'.$mobileNo,
-                "to" => '918756966569',
+               // "to" => $recipient,
+                "to" => 918756966569,
                 "type" => "template",
                 "template" => [
                     "name" => $template_id,
@@ -102,6 +112,27 @@ class SMSService
         // A gateway outage returns something that is not the expected JSON, and
         // reading ->status off null used to be a fatal error.
         return ($responsearr->status ?? null) === 'success';
+    }
+
+    /**
+     * MSG91 wants the country code and the number with no spaces.
+     * A number that already starts with 91 is left as it is.
+     *
+     * @param  mixed  $mobileNo
+     */
+    public static function whatsAppRecipient($mobileNo): ?string
+    {
+        $digits = preg_replace('/\D+/', '', (string) $mobileNo);
+
+        if ($digits === null || strlen($digits) < 10) {
+            return null;
+        }
+
+        if (str_starts_with($digits, '91') && strlen($digits) > 10) {
+            return $digits;
+        }
+
+        return '91'.$digits;
     }
 
     public static function verifyOTP($mobileNo, $otp)

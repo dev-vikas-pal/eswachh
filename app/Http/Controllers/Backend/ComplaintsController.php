@@ -196,10 +196,12 @@ class ComplaintsController extends Controller
             ->where('user_id', auth()->id())
             ->firstOrFail();
 
+        $sectorId = $order->sector_id ?: Order::resolveSectorIdForUser($order->user_id);
+
         $complaint = Complaint::create([
             'order_id' => $order->id,
             'user_id' => auth()->id(),
-            'sector_id' => $order->sector_id,
+            'sector_id' => $sectorId,
             'assigned_user_id' => $order->assigned_user_id,
             'message' => $request->message,
             'status' => Complaint::STATUS_OPEN,
@@ -232,8 +234,11 @@ class ComplaintsController extends Controller
             return;
         }
 
-        // Every franchise owner mapped to this sector.
-        $owners = User::whereHas('sectors', function ($query) use ($complaint) {
+        // Every franchise owner mapped to this sector. The mapping is
+        // sector_user, and one owner can cover more than one sector.
+        $owners = User::whereHas('roles', function ($query) {
+            $query->where('name', SectorService::FRANCHISE_ROLE);
+        })->whereHas('sectors', function ($query) use ($complaint) {
             $query->where('sectors.id', $complaint->sector_id);
         })->get();
 

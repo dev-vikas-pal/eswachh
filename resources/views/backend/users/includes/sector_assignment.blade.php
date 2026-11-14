@@ -8,10 +8,10 @@
     Each block is shown only while its role is ticked; the server clears or
     ignores the value for any other role.
 --}}
-<div class="form-group row mb-3" id="sector-assignment" style="display: none;">
-    {{ html()->label(__('Sectors'))->class('col-sm-2 form-control-label')->for('sectors') }}
+<div class="mt-3" id="sector-assignment" style="display: none;">
+    {{ html()->label(__('Sectors'))->class('form-label')->for('sectors') }}
 
-    <div class="col-sm-10">
+    <div>
         <select name="sectors[]" id="sectors" class="form-control select2" multiple>
             @foreach($sectors as $sector)
             <option value="{{ $sector->id }}" @if(in_array($sector->id, old('sectors', $userSectors))) selected @endif>{{ $sector->name }}</option>
@@ -26,10 +26,10 @@
     </div>
 </div>
 
-<div class="form-group row mb-3" id="cleaner-sector-assignment" style="display: none;">
-    {{ html()->label(__('Sector'))->class('col-sm-2 form-control-label')->for('sector_id') }}
+<div class="mt-3" id="cleaner-sector-assignment" style="display: none;">
+    {{ html()->label(__('Sector'))->class('form-label')->for('sector_id') }}
 
-    <div class="col-sm-10">
+    <div>
         @if($showCleanerSector)
         <select name="sector_id" id="sector_id" class="form-control select2">
             <option value="">{{ __('-- Select an option --') }}</option>

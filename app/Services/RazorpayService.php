@@ -18,6 +18,18 @@ use Razorpay\Api\Api;
 class RazorpayService
 {
     /**
+     * Shown in large type once Razorpay has sent the customer back and the
+     * payment has been checked. Customers close the Razorpay window itself,
+     * so this is the line they are told to wait for.
+     */
+    public const VERIFIED_MESSAGE = 'Payment Verified by eSwachh';
+
+    /**
+     * Shown over the page, and on the Razorpay checkout, before they pay.
+     */
+    public const STAY_OPEN_MESSAGE = 'Do not close this window until you are back on the eSwachh site and you see Payment Verified by eSwachh.';
+
+    /**
      * Configured client. Reads through config so payments keep working once
      * config is cached, which env() would not survive.
      */

@@ -152,6 +152,7 @@
                                         @endif
                                     </div>
                                 </div>
+                            @include('backend.users.includes.sector_assignment')
                             </div>
                             <div class="col-12 col-sm-5">
                                 <div class="card card-accent-primary">
@@ -173,8 +174,6 @@
                     </div>
                 </div>
                 <!--form-group-->
-
-                @include('backend.users.includes.sector_assignment')
 
                 <div class="row  mb-3">
                     <div class="col-6">

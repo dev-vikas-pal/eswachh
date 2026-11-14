@@ -39,7 +39,11 @@
     <div class="card-footer">
         <div class="row">
             <div class="col">
-                @if ($data != "")
+                @php
+                    $showTimestamps = $data != ""
+                        && ! (auth()->check() && auth()->user()->hasRole('customer') && ($module_name ?? '') === 'orders');
+                @endphp
+                @if ($showTimestamps)
                 <small class="float-end text-muted">
                     @lang('Updated at'): {{$data->updated_at->diffForHumans()}},
                     @lang('Created at'): {{$data->created_at->isoFormat('LLLL')}}

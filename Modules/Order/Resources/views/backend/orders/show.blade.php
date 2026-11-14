@@ -15,7 +15,11 @@
 ?>
 @section('content')
 @props(["data"=>"", "module_name", "module_path", "module_title"=>"", "module_icon"=>"", "module_action"=>""])
-@if(session('success'))
+@if(session('success') === \App\Services\RazorpayService::VERIFIED_MESSAGE)
+    <div class="my-4 p-4 text-center border border-success rounded bg-white" role="alert" style="font-size: 32px; font-weight: 800; color: #0f7a3a; line-height: 1.3;">
+        {{ session('success') }}
+    </div>
+@elseif(session('success'))
     <div class="p-4 my-4 text-sm font-semibold border border-green-800 text-green-800 rounded-lg bg-green-50 dark:bg-gray-800 dark:text-green-400" role="alert">
         {{ session('success') }}
     </div>

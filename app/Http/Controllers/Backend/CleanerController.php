@@ -111,23 +111,23 @@ class CleanerController extends Controller
                // DB::raw("CONCAT(cities.name, ', ', areas.name, ', ', sectors.name, ', ', societies.name, ', ', up.house_no) as house_no")
             );
 
-        if ($user) {
-            $roles = $user->roles()->pluck('name')->first();
-            if ($roles == 'customer') {
-                $data = $data->where('orders.user_id', $user->id);
-            } elseif ($roles == 'cleaner') {
-                $data = $data->where('orders.assigned_user_id', $user->id)->where('orders.status', 2);
-            }
-            if (!empty($request->filter_assigned_user_id)) {
+        // A cleaner's round is the cars assigned to them, active or on hold.
+        // The old status = 2 check threw hold cars away, and a sector filter
+        // on top of that hid cars whose sector had never been stamped.
+        $isCleaner = $user && $user->hasRole(SectorService::CLEANER_ROLE) && ! $user->hasRole('super admin');
+
+        if ($isCleaner) {
+            $data = $data->where('orders.assigned_user_id', $user->id);
+        } elseif ($user && $user->hasRole('customer') && ! SectorService::isFranchiseOwner($user)) {
+            $data = $data->where('orders.user_id', $user->id);
+        } else {
+            if (! empty($request->filter_assigned_user_id) && $request->filter_assigned_user_id !== '*') {
                 $data = $data->where('orders.assigned_user_id', $request->filter_assigned_user_id);
             }
+            $data = $data->forSectors($sectorIds);
         }
-        $data = $data->forSectors($sectorIds);
 
-        $data = $data->where(function($query) {
-            $query->where('orders.status', 2)
-                  ->orWhere('orders.status', 4);
-        })->orderBy('orders.status', 'ASC');
+        $data = $data->whereIn('orders.status', [2, 4])->orderBy('orders.status', 'ASC');
 
         $filter['filter_assigned_user_id'] = $request->filter_assigned_user_id ?? '';
         $filter['filter_date'] = $request->filter_date ?? '';

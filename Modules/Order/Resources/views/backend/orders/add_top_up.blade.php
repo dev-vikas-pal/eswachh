@@ -20,17 +20,17 @@
     }
     .payment-warning {
         position: absolute;
-        top: calc(50% + 45px);
+        top: calc(50% + 55px);
         left: 50%;
         transform: translateX(-50%);
-        width: 90%;
-        max-width: 420px;
+        width: 92%;
+        max-width: 640px;
         text-align: center;
         color: #fff;
-        font-size: 16px;
-        font-weight: 600;
-        line-height: 1.5;
-        text-shadow: 0 1px 2px rgba(0,0,0,.6);
+        font-size: 26px;
+        font-weight: 800;
+        line-height: 1.35;
+        text-shadow: 0 2px 4px rgba(0,0,0,.7);
     }
 
 
@@ -63,7 +63,7 @@
 </style>
 <div id="page-loader">
     <div class="loader"></div>
-    <div class="payment-warning">Please do not close or refresh this window while your payment is being processed.</div>
+    <div class="payment-warning">{{ \App\Services\RazorpayService::STAY_OPEN_MESSAGE }}</div>
 </div>
 <div class="card">
     <div class="card-body">
@@ -117,10 +117,16 @@
                         amount: 100,
                         currency: 'INR',
                         name: 'Eswachh Integrated Solutions Private Limited',
-                        description: 'Payment for Order',
+                        description: @json(\App\Services\RazorpayService::STAY_OPEN_MESSAGE),
                         order_id: razorpayOrderID,
                         callback_url: "{{ route('backend.orders.addTopUpComplete') }}",
                         redirect: true,
+                        modal: {
+                            confirm_close: true,
+                            ondismiss: function() {
+                                $('#page-loader').hide();
+                            }
+                        },
                         handler: function(response) {
                             console.log(response);
                         },
@@ -138,7 +144,12 @@
                         'X-CSRF-TOKEN': csrfToken
                     };
                     var rzp = new Razorpay(options);
+                    rzp.on('payment.failed', function() {
+                        $('#page-loader').hide();
+                    });
                     rzp.open();
+                } else {
+                    $('#page-loader').hide();
                 }
             },
             error: function(data) {

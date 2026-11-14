@@ -541,6 +541,7 @@ $sectorOptions = \App\Services\SectorService::sectorOptions($user);
                 url: '{{ route("backend.$module_name.index_data") }}',
                 data: function(d) {
                     d.filter_sector_id = $('#sector_id option:selected').val();
+                    d.filter_franchise_id = new URLSearchParams(window.location.search).get('filter_franchise_id') || '';
                     d.filter_status = $('#status option:selected').val();
                     d.filter_package_id = $('#package_id option:selected').val();
                     d.filter_assigned_user_id = $('#assigned_user_id option:selected').val();

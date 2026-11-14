@@ -54,6 +54,28 @@ class OrdersController extends BackendBaseController
      * @param  int  $id
      * @return void
      */
+    /**
+     * Sectors a list may use. A specific sector wins. Otherwise a franchise
+     * chosen on the dashboard covers every sector mapped to that owner.
+     *
+     * @return array<int, int>|null
+     */
+    private function sectorIdsFromRequest(): ?array
+    {
+        $sector = request()->get('filter_sector_id');
+        $franchise = request()->get('filter_franchise_id');
+
+        if ($sector !== null && $sector !== '' && $sector !== '*') {
+            return SectorService::selectedSectorIds($sector);
+        }
+
+        if ($franchise !== null && $franchise !== '' && $franchise !== '*') {
+            return SectorService::sectorIdsForDashboard($franchise);
+        }
+
+        return SectorService::selectedSectorIds(null);
+    }
+
     private function guardSectorAccess($id)
     {
         $sectorIds = SectorService::allowedSectorIds();
@@ -222,7 +244,7 @@ class OrdersController extends BackendBaseController
             return redirect()->route('backend.orders.show', ['order' => $order]);
         }
 
-        \Session::put('success', 'Payment successful, your cloth count has been increased successfully.');
+        \Session::put('success', RazorpayService::VERIFIED_MESSAGE);
 
         return redirect()->route('backend.orders.show', ['order' => $order]);
     }
@@ -462,7 +484,7 @@ class OrdersController extends BackendBaseController
 
         try {
             $this->applyRenewal($order, $payment);
-            \Session::put('success', 'Payment successful, your order has been placed successfully.');
+            \Session::put('success', RazorpayService::VERIFIED_MESSAGE);
         } catch (\Throwable $e) {
             \Session::put('error', RazorpayService::reportFailure($e, $payment, $order));
         }
@@ -521,7 +543,7 @@ class OrdersController extends BackendBaseController
             return redirect()->route('backend.orders.show', ['order' => $order]);
         }
 
-        \Session::put('success', 'Payment successful, your order has been placed successfully.');
+        \Session::put('success', RazorpayService::VERIFIED_MESSAGE);
 
         return redirect()->route('backend.orders.show', ['order' => $order]);
     }
@@ -773,11 +795,11 @@ class OrdersController extends BackendBaseController
             });
         }
 
-        // Sector restriction. The requested sector is validated against the
-        // user's own sectors, so this cannot be widened from the browser.
-        $$module_name = $$module_name->forSectors(
-            SectorService::selectedSectorIds(request()->get('filter_sector_id'))
-        );
+        // Sector restriction. A list opened from the super-admin dashboard
+        // arrives with a franchise, which expands to every sector that
+        // franchise owns. A chosen sector still wins, and a franchise owner
+        // cannot widen either value past their own sectors.
+        $$module_name = $$module_name->forSectors($this->sectorIdsFromRequest());
 
         $$module_name = $$module_name->whereNotNull('renew_date');
         $request = request()->all();

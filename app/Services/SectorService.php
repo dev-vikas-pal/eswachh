@@ -121,6 +121,55 @@ class SectorService
      *
      * @return array<int, string>
      */
+    /**
+     * Franchise owners a super admin can pick on the dashboard.
+     * One owner may cover several sectors, so the dashboard filters by the
+     * owner and then includes every sector mapped to them.
+     *
+     * @return array<int, string>
+     */
+    public static function franchiseOptions(): array
+    {
+        return User::whereHas('roles', function ($query) {
+            $query->where('name', self::FRANCHISE_ROLE);
+        })->orderBy('name')->pluck('name', 'id')->all();
+    }
+
+    /**
+     * Sector ids the dashboard (and a list opened from it) should use.
+     *
+     * A franchise owner always gets their own sectors, whatever the browser
+     * asks for. A super admin with no franchise chosen is unrestricted. A
+     * chosen franchise is every sector on that owner's mapping.
+     *
+     * @param  mixed  $franchise_user_id
+     * @return array<int, int>|null
+     */
+    public static function sectorIdsForDashboard($franchise_user_id = null, ?User $user = null): ?array
+    {
+        $allowed = self::allowedSectorIds($user);
+
+        if ($allowed !== null) {
+            return $allowed;
+        }
+
+        if ($franchise_user_id === null || $franchise_user_id === '' || $franchise_user_id === '*') {
+            return null;
+        }
+
+        $owner = User::whereHas('roles', function ($query) {
+            $query->where('name', self::FRANCHISE_ROLE);
+        })->find((int) $franchise_user_id);
+
+        if (! $owner) {
+            abort(404);
+        }
+
+        return $owner->sectors()->pluck('sectors.id')->map(function ($id) {
+            return (int) $id;
+        })->all();
+    }
+
     public static function sectorOptions(?User $user = null): array
     {
         $allowed = self::allowedSectorIds($user);

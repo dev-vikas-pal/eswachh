@@ -106,7 +106,7 @@ class RazorpayController extends Controller
             return redirect()->route('order-success', ['order' => $order]);
         }
 
-        \Session::put('success', 'Payment successful, your order will be despatched in the next 48 hours.');
+        \Session::put('success', RazorpayService::VERIFIED_MESSAGE);
 
         return redirect()->route('order-success', ['order' => $order]);
     }

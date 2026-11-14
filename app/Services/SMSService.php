@@ -77,6 +77,18 @@ class SMSService
             return false;
         }
 
+        // On a development or test site everything goes to one test number.
+        $testRecipient = self::whatsAppRecipient(config('services.msg91.test_recipient'));
+
+        if ($testRecipient !== null) {
+            Log::info('WhatsApp message redirected to the test recipient.', [
+                'intended' => $recipient,
+                'template' => $template_id,
+            ]);
+
+            $recipient = $testRecipient;
+        }
+
         $response = Http::withHeaders([
             'Content-Type' => 'application/json',
             'authkey' => $authkey,
@@ -84,8 +96,7 @@ class SMSService
             "integrated_number" => $integrated_number,
             "content_type" => "template",
             "payload" => [
-               // "to" => $recipient,
-                "to" => 918756966569,
+                "to" => $recipient,
                 "type" => "template",
                 "template" => [
                     "name" => $template_id,

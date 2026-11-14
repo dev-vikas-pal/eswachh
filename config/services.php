@@ -72,6 +72,15 @@ return [
          * sending, or false to silence it in production too.
          */
         'enabled' => env('SMS_ENABLED'),
+
+        /*
+         * Send every message to this one number instead of the real person.
+         *
+         * For development and test sites that send for real: you see exactly
+         * what a customer, cleaner or franchise owner would receive, and none
+         * of them gets it. Leave it unset on the live site.
+         */
+        'test_recipient' => env('MSG91_TEST_RECIPIENT'),
     ],
 
     'twofactor' => [

@@ -440,6 +440,9 @@ class UserController extends Controller
             'first_name' => 'required',
             'last_name' => 'required',
             'email' => 'required|email|unique:users',
+            // Same rule as customer signup: login and WhatsApp both find the
+            // user by this number, so it must belong to one live account.
+            'mobile' => 'nullable|digits:10|unique:users,mobile,NULL,id,deleted_at,NULL',
             'password' => 'required|confirmed|min:4',
         ]);
 

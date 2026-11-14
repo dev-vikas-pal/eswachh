@@ -69,6 +69,20 @@
                 </div>
 
                 <div class="form-group row  mb-3">
+                    {{ html()->label(__('labels.backend.users.fields.mobile'))->class('col-sm-2 form-control-label')->for('mobile') }}
+
+                    <div class="col-sm-10">
+                        {{ html()->text('mobile')
+                                ->class('form-control')
+                                ->placeholder(__('labels.backend.users.fields.mobile'))
+                                ->attribute('maxlength', 10)
+                                ->attribute('inputmode', 'numeric')
+                                ->attribute('pattern', '[0-9]{10}')
+                                ->attribute('title', 'Enter a 10 digit mobile number') }}
+                    </div>
+                </div>
+
+                <div class="form-group row  mb-3">
                     {{ html()->label(__('labels.backend.users.fields.password'))->class('col-sm-2 form-control-label')->for('password') }}
 
                     <div class="col-sm-10">

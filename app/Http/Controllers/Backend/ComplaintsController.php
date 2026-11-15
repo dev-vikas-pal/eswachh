@@ -219,8 +219,9 @@ class ComplaintsController extends Controller
      */
     private function notifyOfNewComplaint(Complaint $complaint, Order $order): void
     {
-        $customer = auth()->user();
-        $arguments = [$order->car_number, $customer->name, \Illuminate\Support\Str::limit($complaint->message, 120)];
+        // Both approved MSG91 templates take one variable, {{1}} = car number.
+        // Sending more than the template declares makes MSG91 reject it.
+        $arguments = [$order->car_number];
 
         if ($order->assigned_user_id) {
             $cleaner = User::find($order->assigned_user_id);
